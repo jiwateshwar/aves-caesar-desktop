@@ -20,6 +20,9 @@ resources/models/*
 
 build/
 dist/
+/docs/
+/scripts/dev/*
+!/scripts/dev/run.py
 *.spec
 *.log
 installer/windows/Output/

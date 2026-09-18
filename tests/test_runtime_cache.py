@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 
 from bird_desktop.inference.providers import RuntimeCache
@@ -52,3 +53,8 @@ def _runtime_config(detector: Path, classifier: Path, labels: Path) -> RuntimeCo
         crop_size=224,
         provider_preference="auto",
     )
+
+
+def test_runtime_probe_cache_changes_with_stable_classifier_batch(tmp_path):
+    config = RuntimeConfig(tmp_path / "d", tmp_path / "c", tmp_path / "l")
+    assert RuntimeCache._key(config) != RuntimeCache._key(replace(config, directml_classifier_batch_size=0))

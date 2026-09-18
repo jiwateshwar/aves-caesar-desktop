@@ -39,7 +39,7 @@ class ExifTool:
 
 
     @classmethod
-    def extract_preview(cls, raw_path: Path) -> Path:
+    def extract_preview(cls, raw_path: Path, session=None) -> Path:
         exiftool = cls.find()
         if not exiftool:
             raise RuntimeError("ExifTool is required to extract RAW embedded previews. Run python scripts/setup/install_exiftool.py.")
@@ -50,9 +50,20 @@ class ExifTool:
             os.close(output_handle)
             output = Path(output_name)
             command = [exiftool, "-b", f"-{tag}", str(raw_path)]
-            with output.open("wb") as handle:
-                result = subprocess.run(command, stdout=handle, stderr=subprocess.PIPE, check=False, **WorkerProcessCommand.hidden_window_options())
-            if result.returncode == 0 and output.stat().st_size > 0:
+            try:
+                with output.open("wb") as handle:
+                    if session is not None:
+                        handle.write(session.execute(["-b", f"-{tag}", str(raw_path.resolve())]))
+                        success = True
+                    else:
+                        result = subprocess.run(command, stdout=handle, stderr=subprocess.PIPE, check=False, **WorkerProcessCommand.hidden_window_options())
+                        success = result.returncode == 0
+            except Exception:
+                output.unlink(missing_ok=True)
+                for candidate in candidates:
+                    candidate.unlink(missing_ok=True)
+                raise
+            if success and output.stat().st_size > 0:
                 candidates.append(output)
             else:
                 output.unlink(missing_ok=True)

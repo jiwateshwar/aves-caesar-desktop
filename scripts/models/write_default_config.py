@@ -18,6 +18,7 @@ config = {
     "crop_size": 224,
     "detector_batch_size": 4,
     "classifier_batch_size": 32,
+    "directml_classifier_batch_size": 4,
     "provider_preference": "auto"
 }
 

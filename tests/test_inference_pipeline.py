@@ -11,9 +11,11 @@ from bird_desktop.inference.pipeline import BirdOnnxPipeline
 
 def test_pipeline_prepares_onnxruntime_before_session_import(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls = []
-    module = SimpleNamespace(InferenceSession=lambda path, providers: {"path": path, "providers": providers})
-    pipeline = SimpleNamespace(provider_selection=SimpleNamespace(selected=["CPUExecutionProvider"]))
+    from bird_desktop.runtime.config import RuntimeConfig
+    module = SimpleNamespace(SessionOptions=lambda: SimpleNamespace(), InferenceSession=lambda path, providers, sess_options: {"path": path, "providers": providers})
     model_path = tmp_path / "model.onnx"
+    pipeline = SimpleNamespace(provider_selection=SimpleNamespace(selected=["CPUExecutionProvider"]),
+                               config=RuntimeConfig(model_path, model_path, model_path))
 
     monkeypatch.setitem(sys.modules, "onnxruntime", module)
     monkeypatch.setattr("bird_desktop.inference.pipeline.OnnxRuntimeLoader.prepare", lambda: calls.append("prepared"))

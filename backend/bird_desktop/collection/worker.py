@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import sys
 import traceback
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 from ..inference.cache import PredictionCache
+from ..inference.corrections import ManualCorrectionStore
 from ..inference.providers import ProviderSelector, RuntimeResolution
 from ..inference.result_filter import PredictionResultFilter
 from ..inference.services import PredictionService
@@ -15,6 +17,7 @@ from ..runtime.config import RuntimeConfig
 from ..runtime.settings import DEFAULT_ACCEPTED_CLASSIFICATION_THRESHOLD
 from ..runtime.worker_io import WorkerLogRedirect, WorkerStatusWriter
 from .services import COLLECTION_SCAN_MODE_RAW_JPEG, COLLECTION_SCAN_MODES, CollectionIndexer, CollectionScanner, CollectionStore
+from .transport import CollectionStatusEncoder
 
 
 class CollectionWorker:
@@ -23,6 +26,7 @@ class CollectionWorker:
         self._runtime_key: str | None = None
         self._log_path = sys.argv[1] if len(sys.argv) > 1 else None
         self._status_writer = WorkerStatusWriter()
+        self._transport = CollectionStatusEncoder()
 
 
     def run(self) -> None:
@@ -52,19 +56,20 @@ class CollectionWorker:
         indexer = CollectionIndexer(store.thumbnail_data_url)
         config = RuntimeConfig.load()
         model_fingerprint = PredictionCache.model_fingerprint(config)
-        cached_predictions_by_image = self._cached_predictions_by_image(images, model_fingerprint, config.min_classification_confidence)
+        image_keys = store.image_keys(images)
+        cached_predictions_by_image = self._cached_predictions_by_image(images, model_fingerprint, config.min_classification_confidence, image_keys)
         processed_images: list[Path] = []
         total = len(images)
-        completed = self._reuse_cached_predictions(images, cached_predictions_by_image, threshold, store, indexer, processed_images)
+        completed = self._reuse_cached_predictions(images, cached_predictions_by_image, threshold, store, indexer, processed_images, image_keys)
         errors = 0
         initial_status = {"state": "running", "total": total, "completed": completed, "errors": errors, "currentFile": "", "message": f"Found {total} image(s).", "species": indexer.species()}
-        if completed > 0:
-            store.save_thumbnails(initial_status)
-
         self._write(initial_status)
+        last_publication = time.monotonic()
 
         service = self._prediction_service_for_runtime(runtime)
-        missing_images = [image_path for image_path in images if store.image_key(image_path) not in cached_predictions_by_image]
+        self._model_fingerprint = model_fingerprint
+        self._thumbnail_factory = indexer._thumbnail_data_url
+        missing_images = [image_path for image_path in images if image_keys[image_path] not in cached_predictions_by_image]
         self._write_log({"event": "prediction_plan", "total": total, "cached": completed, "missing": len(missing_images), "providers": runtime.selection.selected})
         if missing_images:
             self._write({"state": "running", "total": total, "completed": completed, "errors": errors, "currentFile": str(missing_images[0]), "message": f"Processing {len(missing_images)} image(s).", "species": indexer.species()})
@@ -72,78 +77,78 @@ class CollectionWorker:
         for image_path, result, error in self._prediction_results_for_chunk(missing_images, service, threshold):
             current_file = str(image_path)
             if error is None and result is not None:
-                indexer.add_prediction(image_path, result, threshold)
-                processed_images.append(image_path)
-                completed += 1
-                status = {"state": "running", "total": total, "completed": completed, "errors": errors, "currentFile": current_file, "message": "Collection scan running.", "species": indexer.species()}
-                store.save_thumbnails(status)
-                self._write(status)
-            else:
+                try:
+                    records = indexer.add_prediction(image_path, result, threshold, self._event_thumbnails)
+                    store.save_thumbnail_records(records)
+                    processed_images.append(image_path)
+                except Exception as exc:
+                    error = exc
+                    self._write_log({"event": "indexing_error", "path": current_file, "message": str(exc)})
+            if error is not None:
                 errors += 1
-                completed += 1
-                status = {"state": "running", "total": total, "completed": completed, "errors": errors, "currentFile": current_file, "message": str(error), "species": indexer.species()}
-                store.save_thumbnails(status)
+            completed += 1
+            if time.monotonic() - last_publication >= 0.4:
+                status = {"state": "running", "total": total, "completed": completed, "errors": errors, "currentFile": current_file, "message": str(error) if error else "Collection scan running.", "species": indexer.species()}
                 self._write(status)
+                last_publication = time.monotonic()
 
         status = {"state": "done", "total": total, "completed": completed, "errors": errors, "currentFile": "", "message": "Collection scan complete.", "species": indexer.species()}
-        store.save_thumbnails(status)
         self._write(status)
 
 
     def _prediction_results_for_chunk(self, image_paths: list[Path], service: PredictionService, threshold: float) -> Iterator[tuple[Path, dict[str, Any] | None, Exception | None]]:
         requests = [{"imagePath": str(image_path), "includePreview": False} for image_path in image_paths]
-        completed = 0
-        prediction_iterator = service.iter_predict_many(requests, threshold)
-        self._write_log({"event": "prediction_stream_start", "count": len(image_paths), "detectorBatchSize": service.config.detector_batch_size, "classifierBatchSize": service.config.classifier_batch_size})
+        events = service.iter_prediction_events(requests, threshold, getattr(self, "_model_fingerprint", None),
+                                                getattr(self, "_thumbnail_factory", None))
         try:
-            for image_path in image_paths:
-                self._write_log({"event": "prediction_next_start", "completed": completed, "path": str(image_path)})
-                with WorkerLogRedirect(self._log_path):
-                    result = next(prediction_iterator)
-
-                completed += 1
-                self._write_log({"event": "prediction_stream_result", "completed": completed, "path": str(image_path), "birds": len(result.get("birds", [])) if isinstance(result, dict) else None})
-                yield image_path, result, None
-
-            return
-        except StopIteration:
-            self._write_log({"event": "prediction_stream_stop_iteration", "completed": completed, "expected": len(image_paths)})
-            return
-        except Exception:
-            self._write_log({"event": "prediction_stream_error", "completed": completed, "traceback": traceback.format_exc()})
-            for image_path, request in zip(image_paths[completed:], requests[completed:]):
+            while True:
                 try:
                     with WorkerLogRedirect(self._log_path):
-                        result = service.predict(request, threshold)
+                        event = next(events)
+                except StopIteration:
+                    break
+                self._event_thumbnails = event.thumbnails
+                if event.error is not None:
+                    self._write_log({"event": "prediction_error", "path": str(event.image_path), "message": str(event.error)})
+                yield event.image_path, event.result, event.error
+        finally:
+            events.close()
+            self._write_log({"event": "prediction_metrics", "stages": service.performance_metrics()})
+            service.close()
 
-                    self._write_log({"event": "prediction_fallback_result", "path": str(image_path), "birds": len(result.get("birds", [])) if isinstance(result, dict) else None})
-                    yield image_path, result, None
-                except Exception as exc:
-                    self._write_log({"event": "prediction_fallback_error", "path": str(image_path), "message": str(exc), "traceback": traceback.format_exc()})
-                    yield image_path, None, exc
 
-
-    def _cached_predictions_by_image(self, images: list[Path], model_fingerprint: str, min_classification_confidence: float) -> dict[str, dict[str, Any]]:
+    def _cached_predictions_by_image(self, images: list[Path], model_fingerprint: str, min_classification_confidence: float,
+                                     image_keys: dict[Path, str] | None = None) -> dict[str, dict[str, Any]]:
         cache = PredictionCache()
         result_filter = PredictionResultFilter(min_classification_confidence)
         cached: dict[str, dict[str, Any]] = {}
-        entries_by_image = cache.lookup_many_for_model(images, model_fingerprint)
-        for image_key, entry in entries_by_image.items():
-            if entry is not None and isinstance(entry.get("result"), dict):
-                cached[image_key] = result_filter.apply(entry["result"])
+        corrections = ManualCorrectionStore()
+        entries_by_image = cache.lookup_many_for_model(images, model_fingerprint, path_keys=image_keys)
+        entries = [(key, entry) for key, entry in entries_by_image.items() if isinstance(entry.get("result"), dict)]
+        corrected = corrections.apply_many([(Path(entry["path"]), result_filter.apply(entry["result"])) for _, entry in entries],
+                                           path_keys=image_keys, copy_results=False)
+        cached.update({key: result for (key, _), result in zip(entries, corrected)})
 
         return cached
 
 
-    def _reuse_cached_predictions(self, images: list[Path], cached_predictions_by_image: dict[str, dict[str, Any]], threshold: float, store: CollectionStore, indexer: CollectionIndexer, processed_images: list[Path]) -> int:
+    def _reuse_cached_predictions(self, images: list[Path], cached_predictions_by_image: dict[str, dict[str, Any]], threshold: float, store: CollectionStore, indexer: CollectionIndexer, processed_images: list[Path], image_keys=None) -> int:
         completed = 0
+        image_keys = image_keys if image_keys is not None else {path: store.image_key(path) for path in images}
+        prepared = []
         for image_path in images:
-            image_key = store.image_key(image_path)
+            image_key = image_keys[image_path]
             cached_prediction = cached_predictions_by_image.get(image_key)
             if cached_prediction is not None:
-                indexer.add_prediction(image_path, cached_prediction, threshold)
-                processed_images.append(image_path)
-                completed += 1
+                candidates = indexer._valid_occurrences(image_path, cached_prediction, threshold)
+                keys = indexer.thumbnail_keys(image_path, [item["box"] for item in candidates], path_key=image_key)
+                prepared.append((image_path, candidates, keys))
+        store.prefetch_thumbnails([key for _, _, keys in prepared for key in keys])
+        for image_path, candidates, keys in prepared:
+            records = indexer._index_occurrences(image_path, candidates, keys)
+            store.save_thumbnail_records(records)
+            processed_images.append(image_path)
+            completed += 1
 
         return completed
 
@@ -194,7 +199,7 @@ class CollectionWorker:
 
 
     def _write(self, payload: dict[str, Any]) -> None:
-        if not self._status_writer.write(payload):
+        if not self._status_writer.write(self._transport.encode(payload)):
             raise SystemExit(0)
 
 

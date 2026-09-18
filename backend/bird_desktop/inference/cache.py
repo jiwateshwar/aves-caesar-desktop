@@ -10,6 +10,7 @@ from typing import Any
 from ..runtime.config import RuntimeConfig
 from ..runtime.file_fingerprint import FileContentFingerprint
 from ..runtime.paths import AppPaths
+from ..runtime.sqlite import ClosingConnection
 
 
 @dataclass(frozen=True)
@@ -46,8 +47,17 @@ class PredictionCache:
         return None
 
 
-    def lookup_many_for_model(self, image_paths: list[Path], model_fingerprint: str) -> dict[str, dict[str, Any]]:
-        identities = {self._path_key(image_path): self.identity(image_path) for image_path in image_paths}
+    def lookup_many_for_model(self, image_paths: list[Path], model_fingerprint: str,
+                              *, path_keys: dict[Path, str] | None = None) -> dict[str, dict[str, Any]]:
+        identities = {}
+        for image_path in image_paths:
+            try:
+                path_key = path_keys.get(image_path) if path_keys is not None else None
+                identities[path_key if path_key is not None else self._path_key(image_path)] = self.identity(image_path)
+            except OSError:
+                # A file removed during enumeration becomes an individual stream
+                # error; it must not abort cache lookup for the entire collection.
+                continue
         entries: dict[str, dict[str, Any]] = {}
         with self._connect() as connection:
             for path_keys in self._chunks(list(identities.keys()), 800):
@@ -218,7 +228,7 @@ class PredictionCache:
 
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, factory=ClosingConnection)
         connection.row_factory = sqlite3.Row
         return connection
 

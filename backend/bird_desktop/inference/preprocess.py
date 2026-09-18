@@ -49,7 +49,7 @@ class BirdImagePreprocessor:
             with ThreadPoolExecutor(max_workers=BirdImagePreprocessor._worker_count(len(crops))) as executor:
                 tensors = list(executor.map(lambda crop: BirdImagePreprocessor._classifier_tensor(crop, crop_size), crops))
 
-        return np.stack(tensors, axis=0).astype(np.float32)
+        return np.stack(tensors, axis=0)
 
 
     @staticmethod
@@ -63,26 +63,32 @@ class BirdImagePreprocessor:
             with ThreadPoolExecutor(max_workers=BirdImagePreprocessor._worker_count(len(jobs))) as executor:
                 tensors = list(executor.map(lambda job: BirdImagePreprocessor._classifier_tensor_from_box(job, crop_size), jobs))
 
-        return np.stack(tensors, axis=0).astype(np.float32)
+        return np.stack(tensors, axis=0)
 
 
     @staticmethod
     def detector_image(image: Image.Image, size: tuple[int, int] = (640, 640)) -> tuple[np.ndarray, tuple[int, int], tuple[float, float]]:
         original = (image.height, image.width)
         resized = image.resize(size, Image.Resampling.BICUBIC)
-        arr = np.asarray(resized, dtype=np.float32) / 255.0
-        tensor = np.transpose(arr, (2, 0, 1))[None, :, :, :].astype(np.float32)
+        try:
+            arr = np.asarray(resized, dtype=np.float32)
+            arr /= 255.0
+            tensor = np.transpose(arr, (2, 0, 1))[None, :, :, :]
+        finally:
+            resized.close()
         scale_x = image.width / float(size[0])
         scale_y = image.height / float(size[1])
         return tensor, original, (scale_x, scale_y)
 
 
     @staticmethod
-    def detector_batch(images: list[Image.Image], size: tuple[int, int] = (640, 640)) -> tuple[np.ndarray, list[tuple[float, float]]]:
+    def detector_batch(images: list[Image.Image], size: tuple[int, int] = (640, 640), executor=None) -> tuple[np.ndarray, list[tuple[float, float]]]:
         if not images:
             return np.empty((0, 3, size[1], size[0]), dtype=np.float32), []
 
-        if len(images) < 3:
+        if executor is not None:
+            prepared = list(executor.map(lambda image: BirdImagePreprocessor.detector_image(image, size), images))
+        elif len(images) < 3:
             prepared = [BirdImagePreprocessor.detector_image(image, size) for image in images]
         else:
             with ThreadPoolExecutor(max_workers=BirdImagePreprocessor._worker_count(len(images))) as executor:
@@ -90,16 +96,23 @@ class BirdImagePreprocessor:
 
         tensors = [tensor[0] for tensor, _target_size, _scale in prepared]
         scales = [scale for _tensor, _target_size, scale in prepared]
-        return np.stack(tensors, axis=0).astype(np.float32), scales
+        # Assign into NCHW storage instead of stacking strided CHW views.
+        batch = np.empty((len(tensors), 3, size[1], size[0]), dtype=np.float32)
+        for index, tensor in enumerate(tensors):
+            batch[index] = tensor
+        return batch, scales
 
 
     @staticmethod
     def _classifier_tensor(crop: Image.Image, crop_size: int) -> np.ndarray:
         resized = crop.resize((crop_size, crop_size), Image.Resampling.BICUBIC)
         try:
-            arr = np.asarray(resized, dtype=np.float32) / 255.0
-            arr = (arr - IMAGENET_MEAN) / IMAGENET_STD
-            return np.transpose(arr, (2, 0, 1))
+            # Normalize contiguous channel planes; keep the same FP32 operations.
+            arr = np.array(np.asarray(resized).transpose(2, 0, 1), dtype=np.float32, order="C")
+            arr /= 255.0
+            arr -= IMAGENET_MEAN[:, None, None]
+            arr /= IMAGENET_STD[:, None, None]
+            return arr
         finally:
             resized.close()
 
@@ -135,6 +148,8 @@ class BirdImagePreprocessor:
         sy0 = int(math.floor(center_y - side / 2))
         sx1 = sx0 + side
         sy1 = sy0 + side
+        if 0 <= sx0 and 0 <= sy0 and sx1 <= width and sy1 <= height:
+            return image.crop((sx0, sy0, sx1, sy1))
         pad_left = max(0, -sx0)
         pad_top = max(0, -sy0)
         crop_x0 = max(0, sx0)

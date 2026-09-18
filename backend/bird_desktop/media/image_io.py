@@ -30,15 +30,33 @@ class ImageLoader:
 
 
     @staticmethod
-    def load(path: str | Path) -> LoadedImage:
+    def load(path: str | Path, session=None) -> LoadedImage:
         ImageLoader._register_heif_opener()
 
         source = Path(path)
-        preview_path = ExifTool.extract_preview(source) if ExifTool.is_raw_file(source) else None
+        preview_path = (ExifTool.extract_preview(source, session=session) if session is not None else ExifTool.extract_preview(source)) if ExifTool.is_raw_file(source) else None
         open_path = preview_path or source
 
-        with Image.open(open_path) as pil_img:
-            image = ImageOps.exif_transpose(pil_img).convert("RGB")
+        try:
+            with Image.open(open_path) as pil_img:
+                if pil_img.format == "JPEG":
+                    # Keep the decoded pixel storage when no rotation is needed.
+                    # The context manager closes the file, not this pixel buffer.
+                    ImageOps.exif_transpose(pil_img, in_place=True)
+                    transposed = pil_img
+                else:
+                    transposed = ImageOps.exif_transpose(pil_img)
+                if transposed.mode == "RGB":
+                    image = transposed
+                else:
+                    try:
+                        image = transposed.convert("RGB")
+                    finally:
+                        transposed.close()
+        except Exception:
+            if preview_path:
+                preview_path.unlink(missing_ok=True)
+            raise
 
         return LoadedImage(image=image, source_path=source, preview_path=preview_path)
 
@@ -58,6 +76,11 @@ class ImageLoader:
     @staticmethod
     def _read_exiftool_metadata(path: Path) -> ImageMetadata:
         tags = ExifTool.read_tags(path)
+        return ImageLoader.metadata_from_tags(tags)
+
+
+    @staticmethod
+    def metadata_from_tags(tags: dict) -> ImageMetadata:
         date = tags.get("DateTimeOriginal") or tags.get("CreateDate") or tags.get("DateTimeCreated")
         lat = ImageLoader._apply_gps_ref(ImageLoader._optional_float(tags.get("GPSLatitude")), tags.get("GPSLatitudeRef"), "S")
         lon = ImageLoader._apply_gps_ref(ImageLoader._optional_float(tags.get("GPSLongitude")), tags.get("GPSLongitudeRef"), "W")

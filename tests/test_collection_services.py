@@ -268,3 +268,91 @@ def test_collection_store_keeps_scan_modes_separate(tmp_path: Path) -> None:
     assert store.load(source, 0.5, "model-v1", 0.0, "jpeg") is not None
     assert store.load(source, 0.5, "model-v1", 0.0, "jpeg")["species"][0]["speciesId"] == "amecro"
     assert store.load(source, 0.5, "model-v1", 0.0, "raw")["species"][0]["speciesId"] == "rawbird"
+
+
+def test_thumbnail_records_are_written_only_once(tmp_path: Path, monkeypatch) -> None:
+    store = CollectionStore(tmp_path / "collection.sqlite3")
+    writes = []
+    original = store._save_thumbnail
+    def save(connection, occurrence, now):
+        writes.append(occurrence["thumbnailKey"])
+        original(connection, occurrence, now)
+    monkeypatch.setattr(store, "_save_thumbnail", save)
+    for index in range(10):
+        record = {"thumbnailKey": str(index), "thumbnailDataUrl": "data:image/jpeg;base64,x"}
+        store.save_thumbnail_records([record])
+        store.save_thumbnail_records([record])
+    assert writes == list(map(str, range(10)))
+    store.prefetch_thumbnails(list(map(str, range(10))))
+    assert store.thumbnail_data_url("9") == "data:image/jpeg;base64,x"
+
+
+def test_bulk_thumbnail_keys_match_original_identity_and_refresh_after_changes(tmp_path: Path) -> None:
+    image = tmp_path / "photo.jpg"
+    image.write_bytes(b"first")
+    indexer = CollectionIndexer()
+    boxes = [[0., 1., 20., 30.], [5., 6., 25., 36.]]
+    keys = indexer.thumbnail_keys(image, boxes)
+    assert keys == [indexer._thumbnail_key(image, box) for box in boxes]
+    image.write_bytes(b"changed-size")
+    assert indexer.thumbnail_keys(image, boxes) != keys
+    assert indexer.thumbnail_keys(tmp_path / "missing.jpg", []) == []
+
+
+def test_cached_indexing_prepares_occurrences_and_thumbnail_keys_once(tmp_path, monkeypatch):
+    path = tmp_path / "birds.jpg"
+    Image.new("RGB", (40, 40)).save(path)
+    result = {"birds": [
+        {"box": [1, 1, 15, 15], "classification": [{"species_id": "first", "confidence": .9}]},
+        {"box": [2, 2, 20, 20], "classification": [{"species_id": "second", "confidence": .2, "manual": True}]},
+        {"box": [3, 3, 30, 30], "classification": [{"species_id": "excluded", "confidence": .1}]},
+    ]}
+    store = CollectionStore(tmp_path / "collection.sqlite3")
+    reference = CollectionIndexer()
+    records = reference.add_prediction(path, result, .5)
+    store.save_thumbnail_records(records)
+    indexer = CollectionIndexer(store.thumbnail_data_url)
+    calls = []
+    original = indexer.thumbnail_keys
+    def keys(image_path, boxes, **kwargs):
+        calls.append(image_path)
+        return original(image_path, boxes, **kwargs)
+    monkeypatch.setattr(indexer, "thumbnail_keys", keys)
+    image_keys = {path: store.image_key(path)}
+    processed = []
+    count = CollectionWorker()._reuse_cached_predictions(
+        [path], {image_keys[path]: result}, .5, store, indexer, processed, image_keys)
+    assert count == 1 and processed == [path]
+    assert calls == [path]
+    assert indexer.species() == reference.species()
+    assert [s["occurrences"][0]["birdIndex"] for s in indexer.species()] == [0, 1]
+
+
+def test_supplied_thumbnail_path_key_still_checks_current_file_identity(tmp_path):
+    path = tmp_path / "image.jpg"
+    path.write_bytes(b"old")
+    key = str(path.resolve()).casefold()
+    indexer = CollectionIndexer()
+    boxes = [[1., 2., 3., 4.]]
+    before = indexer.thumbnail_keys(path, boxes, path_key=key)
+    assert before == indexer.thumbnail_keys(path, boxes)
+    path.write_bytes(b"new file size")
+    after = indexer.thumbnail_keys(path, boxes, path_key=key)
+    assert after != before
+    assert after == indexer.thumbnail_keys(path, boxes)
+
+
+def test_collection_load_refreshes_thumbnail_misses_written_by_another_worker(tmp_path: Path) -> None:
+    source = tmp_path / "photos"
+    source.mkdir()
+    path = source / "bird.jpg"
+    Image.new("RGB", (40, 40)).save(path)
+    result = {"birds": [{"box": [1, 1, 20, 20], "classification": [{"species_id": "bird", "confidence": .9}]}]}
+    cache = PredictionCache(tmp_path / "prediction-cache.sqlite3")
+    cache.store(path, "model", "location", result)
+    reader = CollectionStore(tmp_path / "collection.sqlite3", cache)
+    assert reader.load(source, .5, "model", .01)["species"][0]["thumbnailDataUrl"] is None
+    writer = CollectionStore(reader.path, cache)
+    records = CollectionIndexer().add_prediction(path, result, .5)
+    writer.save_thumbnail_records(records)
+    assert reader.load(source, .5, "model", .01)["species"][0]["thumbnailDataUrl"].startswith("data:image/jpeg;base64,")

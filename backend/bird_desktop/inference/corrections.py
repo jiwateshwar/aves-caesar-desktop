@@ -8,6 +8,7 @@ from typing import Any
 
 from ..data.bird_names import BirdNamesLoader
 from ..runtime.paths import AppPaths
+from ..runtime.sqlite import ClosingConnection
 
 
 class ManualCorrectionStore:
@@ -65,12 +66,59 @@ class ManualCorrectionStore:
 
 
     def apply(self, image_path: str | Path, result: dict[str, Any]) -> dict[str, Any]:
-        corrected = copy.deepcopy(result)
+        return self._apply_corrections(result, self._corrections_for_image(Path(image_path)))
+
+
+    def apply_many(self, entries: list[tuple[Path, dict[str, Any]]],
+                   *, path_keys: dict[Path, str] | None = None, copy_results: bool = True) -> list[dict[str, Any]]:
+        apply = self._apply_corrections if copy_results else self._apply_corrections_in_place
+        if not entries:
+            return []
+        with self._connect() as connection:
+            if connection.execute("select 1 from manual_corrections limit 1").fetchone() is None:
+                return [apply(result, {}) for _, result in entries]
+            entry_keys = []
+            for path, _ in entries:
+                key = path_keys.get(path) if path_keys is not None else None
+                if key is None:
+                    try:
+                        key = str(path.resolve()).casefold()
+                    except OSError:
+                        key = None
+                entry_keys.append(key)
+            keys = list(dict.fromkeys(key for key in entry_keys if key is not None))
+            corrections = {}
+            for start in range(0, len(keys), 800):
+                chunk = keys[start:start + 800]
+                rows = connection.execute(f"select path_key, size, mtime_ns, bird_index, species_id from manual_corrections where path_key in ({','.join('?' for _ in chunk)})", chunk)
+                for row in rows:
+                    versions = corrections.setdefault(row["path_key"], {})
+                    versions.setdefault((row["size"], row["mtime_ns"]), {})[row["bird_index"]] = row["species_id"]
+        results = []
+        for (path, result), key in zip(entries, entry_keys):
+            selected = {}
+            versions = corrections.get(key)
+            if versions:
+                # Only corrected files need another freshness check. Prediction
+                # cache validation still checks every file independently.
+                try:
+                    identity = self._identity(path, key)
+                    selected = versions.get((identity["size"], identity["mtimeNs"]), {})
+                except OSError:
+                    pass
+            results.append(apply(result, selected))
+        return results
+
+
+    def _apply_corrections(self, result: dict[str, Any], corrections: dict[int, str]) -> dict[str, Any]:
+        return self._apply_corrections_in_place(copy.deepcopy(result), corrections)
+
+
+    def _apply_corrections_in_place(self, corrected: dict[str, Any], corrections: dict[int, str]) -> dict[str, Any]:
         birds = corrected.get("birds")
         if not isinstance(birds, list):
             return corrected
 
-        corrections = self._corrections_for_image(Path(image_path))
         if not corrections:
             return corrected
 
@@ -154,13 +202,13 @@ class ManualCorrectionStore:
             )
 
 
-    def _identity(self, image_path: Path) -> dict[str, Any]:
+    def _identity(self, image_path: Path, path_key: str | None = None) -> dict[str, Any]:
         stat = image_path.stat()
-        return {"path": str(image_path), "pathKey": str(image_path.resolve()).casefold(), "size": stat.st_size, "mtimeNs": stat.st_mtime_ns}
+        return {"path": str(image_path), "pathKey": path_key if path_key is not None else str(image_path.resolve()).casefold(), "size": stat.st_size, "mtimeNs": stat.st_mtime_ns}
 
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, factory=ClosingConnection)
         connection.row_factory = sqlite3.Row
         return connection

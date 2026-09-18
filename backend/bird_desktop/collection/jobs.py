@@ -9,6 +9,7 @@ from typing import Any
 from ..inference.providers import RuntimeProbe
 from ..runtime.paths import AppPaths
 from ..runtime.worker_process import WorkerProcessCommand
+from .transport import CollectionStatusDecoder
 
 
 class CollectionJobs:
@@ -55,6 +56,7 @@ class CollectionProcess:
         self._process = process
         self._lock = threading.Lock()
         self._stop_requested = False
+        self._transport = CollectionStatusDecoder()
         self._status: dict[str, Any] = {"state": "running", "total": 0, "completed": 0, "errors": 0, "currentFile": "", "message": "Starting collection scan...", "species": []}
         self._reader = threading.Thread(target=self._read_output, daemon=True)
         self._reader.start()
@@ -123,6 +125,14 @@ class CollectionProcess:
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 continue
+
+            try:
+                payload = self._transport.decode(payload)
+            except (ValueError, TypeError, KeyError):
+                self._terminal_status("error", "Invalid collection worker status.")
+                if self._process.poll() is None:
+                    self._process.terminate()
+                return
 
             with self._lock:
                 self._status.update(payload)

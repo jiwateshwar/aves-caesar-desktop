@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PIL import Image
+from ..runtime.path_keys import canonical_file_keys
 
 from ..inference.cache import PredictionCache
 from ..inference.corrections import ManualCorrectionStore
@@ -17,6 +18,7 @@ from ..media.exiftool import ExifTool
 from ..media.image_io import HEIF_EXTENSIONS, ImageLoader
 from ..organization.services import BatchFileOrganizer
 from ..runtime.paths import AppPaths
+from ..runtime.sqlite import ClosingConnection
 
 
 COLLECTION_SCAN_MODE_RAW = "raw"
@@ -34,16 +36,22 @@ class CollectionIndexer:
         self._species_images: dict[str, set[str]] = {}
 
 
-    def add_prediction(self, image_path: Path, result: dict[str, Any], confidence_threshold: float) -> None:
+    def add_prediction(self, image_path: Path, result: dict[str, Any], confidence_threshold: float, thumbnails: dict[str, str] | None = None) -> list[dict[str, Any]]:
         candidates = self._valid_occurrences(image_path, result, confidence_threshold)
-        if not candidates:
-            return
+        return self._index_occurrences(image_path, candidates, thumbnails=thumbnails)
 
-        thumbnails = self._thumbnails(image_path, [candidate["box"] for candidate in candidates])
-        for candidate, thumbnail in zip(candidates, thumbnails):
+
+    def _index_occurrences(self, image_path: Path, candidates: list[dict[str, Any]],
+                           keys: list[str] | None = None, thumbnails: dict[str, str] | None = None) -> list[dict[str, Any]]:
+        if not candidates:
+            return []
+
+        records = self._thumbnails(image_path, [candidate["box"] for candidate in candidates], thumbnails, keys)
+        for candidate, thumbnail in zip(candidates, records):
             candidate["thumbnailKey"] = thumbnail.get("thumbnailKey") if thumbnail else None
             candidate["thumbnailDataUrl"] = thumbnail.get("thumbnailDataUrl") if thumbnail else None
             self._add_occurrence(candidate)
+        return candidates
 
 
     def species(self) -> list[dict[str, Any]]:
@@ -102,8 +110,14 @@ class CollectionIndexer:
         self._species_images[species_id].add(str(occurrence.get("imagePath") or ""))
 
 
-    def _thumbnails(self, image_path: Path, boxes: list[list[float]]) -> list[dict[str, str] | None]:
-        records = [self._cached_thumbnail_record(image_path, box) for box in boxes]
+    def _thumbnails(self, image_path: Path, boxes: list[list[float]], supplied: dict[str, str] | None = None,
+                    keys: list[str] | None = None) -> list[dict[str, str] | None]:
+        records = []
+        keys = self.thumbnail_keys(image_path, boxes) if keys is None else keys
+        for box, key in zip(boxes, keys):
+            data = (supplied or {}).get(json.dumps(box))
+            records.append({"thumbnailKey": key, "thumbnailDataUrl": data}
+                           if data is not None else self._cached_thumbnail_record(image_path, box, key))
         missing_indexes = [index for index, record in enumerate(records) if record is None]
         if not missing_indexes or not self._generate_missing_thumbnails:
             return records
@@ -115,15 +129,15 @@ class CollectionIndexer:
 
         try:
             for index in missing_indexes:
-                records[index] = self._thumbnail_record(loaded.image, image_path, boxes[index])
+                records[index] = self._thumbnail_record(loaded.image, image_path, boxes[index], keys[index])
 
             return records
         finally:
             ImageLoader.cleanup(loaded)
 
 
-    def _cached_thumbnail_record(self, image_path: Path, box: list[float]) -> dict[str, str] | None:
-        thumbnail_key = self._thumbnail_key(image_path, box)
+    def _cached_thumbnail_record(self, image_path: Path, box: list[float], thumbnail_key: str | None = None) -> dict[str, str] | None:
+        thumbnail_key = thumbnail_key if thumbnail_key is not None else self._thumbnail_key(image_path, box)
         if self._thumbnail_lookup is None:
             return None
 
@@ -134,8 +148,8 @@ class CollectionIndexer:
         return {"thumbnailKey": thumbnail_key, "thumbnailDataUrl": data_url}
 
 
-    def _thumbnail_record(self, image: Image.Image, image_path: Path, box: list[float]) -> dict[str, str]:
-        return {"thumbnailKey": self._thumbnail_key(image_path, box), "thumbnailDataUrl": self._thumbnail_data_url(image, box)}
+    def _thumbnail_record(self, image: Image.Image, image_path: Path, box: list[float], thumbnail_key: str | None = None) -> dict[str, str]:
+        return {"thumbnailKey": thumbnail_key if thumbnail_key is not None else self._thumbnail_key(image_path, box), "thumbnailDataUrl": self._thumbnail_data_url(image, box)}
 
 
     def _thumbnail_data_url(self, image: Image.Image, box: list[float]) -> str:
@@ -169,8 +183,15 @@ class CollectionIndexer:
 
 
     def _thumbnail_key(self, image_path: Path, box: list[float]) -> str:
+        return self.thumbnail_keys(image_path, [box])[0]
+
+
+    def thumbnail_keys(self, image_path: Path, boxes: list[list[float]], *, path_key: str | None = None) -> list[str]:
+        if not boxes:
+            return []
         stat = image_path.stat()
-        return json.dumps({"path": str(image_path.resolve()).casefold(), "size": stat.st_size, "mtimeNs": stat.st_mtime_ns, "box": box}, sort_keys=True, separators=(",", ":"))
+        path_key = str(image_path.resolve()).casefold() if path_key is None else path_key
+        return [json.dumps({"path": path_key, "size": stat.st_size, "mtimeNs": stat.st_mtime_ns, "box": box}, sort_keys=True, separators=(",", ":")) for box in boxes]
 
 
     def _primary_classification(self, bird: dict[str, Any]) -> dict[str, Any] | None:
@@ -224,9 +245,22 @@ class CollectionStore:
         self._corrections = corrections or ManualCorrectionStore(self.path.parent / "manual-corrections.sqlite3")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
+        self._thumbnail_cache: dict[str, str | None] = {}
+
+
+    def prefetch_thumbnails(self, keys: list[str]) -> None:
+        missing = list(dict.fromkeys(key for key in keys if key not in self._thumbnail_cache))
+        with self._connect() as connection:
+            for offset in range(0, len(missing), 800):
+                chunk = missing[offset:offset + 800]
+                rows = connection.execute(f"select thumbnail_key, data_url from collection_thumbnails where thumbnail_key in ({','.join('?' for _ in chunk)})", chunk)
+                self._thumbnail_cache.update(dict.fromkeys(chunk))
+                self._thumbnail_cache.update({row["thumbnail_key"]: row["data_url"] for row in rows})
 
 
     def load(self, base_directory: str | Path, threshold: float, model_fingerprint: str, min_classification_confidence: float, scan_mode: str = COLLECTION_SCAN_MODE_RAW_JPEG) -> dict[str, Any] | None:
+        # Another worker may have written/cleared the database since the last load.
+        self._thumbnail_cache.clear()
         entries_by_image = self._prediction_cache.lookup_under_directory_for_model(base_directory, model_fingerprint)
         entries = [(Path(str(entry["path"])), entry) for entry in entries_by_image.values() if self._matches_scan_mode(Path(str(entry["path"])), scan_mode)]
         if not entries:
@@ -234,36 +268,54 @@ class CollectionStore:
 
         result_filter = PredictionResultFilter(min_classification_confidence)
         indexer = CollectionIndexer(self.thumbnail_data_url, generate_missing_thumbnails=False)
-        for image_path, entry in entries:
-            result = entry.get("result")
-            if isinstance(result, dict):
-                filtered_result = result_filter.apply(result)
-                indexer.add_prediction(image_path, self._corrections.apply(image_path, filtered_result), threshold)
+        valid_entries = [(path, result_filter.apply(entry["result"])) for path, entry in entries if isinstance(entry.get("result"), dict)]
+        path_keys = self.image_keys(path for path, _ in entries)
+        # These filtered results are private to this load; no caller owns them.
+        corrected = self._corrections.apply_many(valid_entries, path_keys=path_keys, copy_results=False)
+        prepared = []
+        for (path, _), result in zip(valid_entries, corrected):
+            candidates = indexer._valid_occurrences(path, result, threshold)
+            keys = indexer.thumbnail_keys(path, [item["box"] for item in candidates], path_key=path_keys[path])
+            prepared.append((path, candidates, keys))
+        self.prefetch_thumbnails([key for _, _, keys in prepared for key in keys])
+        for path, candidates, keys in prepared:
+            indexer._index_occurrences(path, candidates, keys)
 
         return {"state": "done", "total": len(entries), "completed": len(entries), "errors": 0, "currentFile": "", "message": "Loaded cached collection predictions.", "species": indexer.species()}
 
 
     def save_thumbnails(self, status: dict[str, Any]) -> None:
         species = status.get("species") if isinstance(status.get("species"), list) else []
+        self.save_thumbnail_records([occurrence for item in species if isinstance(item, dict)
+                                     for occurrence in item.get("occurrences", []) if isinstance(occurrence, dict)])
+
+
+    def save_thumbnail_records(self, records: list[dict[str, Any]]) -> None:
+        records = [item for item in records if isinstance(item.get("thumbnailKey"), str)
+                   and isinstance(item.get("thumbnailDataUrl"), str)
+                   and self._thumbnail_cache.get(item["thumbnailKey"]) != item["thumbnailDataUrl"]]
+        if not records:
+            return
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
-            for item in species:
-                if not isinstance(item, dict):
-                    continue
-
-                for occurrence in item.get("occurrences", []):
-                    if isinstance(occurrence, dict):
-                        self._save_thumbnail(connection, occurrence, now)
+            for occurrence in records:
+                self._save_thumbnail(connection, occurrence, now)
+        self._thumbnail_cache.update({item["thumbnailKey"]: item["thumbnailDataUrl"] for item in records})
 
 
     def thumbnail_data_url(self, thumbnail_key: str) -> str | None:
+        if thumbnail_key in self._thumbnail_cache:
+            return self._thumbnail_cache[thumbnail_key]
         with self._connect() as connection:
             row = connection.execute("select data_url from collection_thumbnails where thumbnail_key = ?", (thumbnail_key,)).fetchone()
 
-        return row["data_url"] if row is not None else None
+        value = row["data_url"] if row is not None else None
+        self._thumbnail_cache[thumbnail_key] = value
+        return value
 
 
     def clear_thumbnails(self) -> int:
+        self._thumbnail_cache.clear()
         with self._connect() as connection:
             cursor = connection.execute("delete from collection_thumbnails")
             deleted_count = cursor.rowcount
@@ -280,6 +332,10 @@ class CollectionStore:
         return str(image_path.resolve()).casefold()
 
 
+    def image_keys(self, image_paths) -> dict[Path, str]:
+        return canonical_file_keys(image_paths)
+
+
     def _save_thumbnail(self, connection: sqlite3.Connection, occurrence: dict[str, Any], now: str) -> None:
         thumbnail_key = occurrence.get("thumbnailKey")
         thumbnail_data_url = occurrence.get("thumbnailDataUrl")
@@ -288,9 +344,7 @@ class CollectionStore:
                 """
                 insert into collection_thumbnails (thumbnail_key, data_url, generated_at)
                 values (?, ?, ?)
-                on conflict(thumbnail_key) do update set
-                    data_url = excluded.data_url,
-                    generated_at = excluded.generated_at
+                on conflict(thumbnail_key) do nothing
                 """,
                 (thumbnail_key, thumbnail_data_url, now),
             )
@@ -314,7 +368,7 @@ class CollectionStore:
 
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, factory=ClosingConnection)
         connection.row_factory = sqlite3.Row
         return connection
 

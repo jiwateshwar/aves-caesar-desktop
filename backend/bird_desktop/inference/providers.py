@@ -11,6 +11,7 @@ import numpy as np
 
 from .onnxruntime_loader import OnnxRuntimeLoader
 from ..runtime.file_fingerprint import FileContentFingerprint
+from .sessions import create_session, stable_classifier_batch_size
 
 
 @dataclass(frozen=True)
@@ -99,10 +100,11 @@ class RuntimeResolver:
 
     @staticmethod
     def _effective_selection(config, selection: ProviderSelection) -> ProviderSelection:
-        detector_session = RuntimeResolver._create_session(config.detector_model, selection.selected)
-        classifier_session = RuntimeResolver._create_session(config.classifier_model, selection.selected)
+        detector_session = create_session(config.detector_model, selection.selected, config, config.detector_batch_size)
+        classifier_session = create_session(config.classifier_model, selection.selected, config, config.classifier_batch_size)
         RuntimeResolver._smoke_detector(detector_session, max(1, int(getattr(config, "detector_batch_size", 1))))
-        RuntimeResolver._smoke_classifier(classifier_session, config.crop_size, max(1, int(getattr(config, "classifier_batch_size", 1))))
+        classifier_batch = stable_classifier_batch_size(classifier_session, config) or max(1, config.classifier_batch_size)
+        RuntimeResolver._smoke_classifier(classifier_session, config.crop_size, classifier_batch)
         providers = RuntimeResolver._session_providers([detector_session, classifier_session])
         selected = [provider for provider in selection.selected if provider in providers]
         if "CPUExecutionProvider" not in selected:
@@ -124,10 +126,7 @@ class RuntimeResolver:
 
     @staticmethod
     def _create_session(path: Path, providers: list[str]):
-        OnnxRuntimeLoader.prepare()
-        import onnxruntime as ort
-
-        return ort.InferenceSession(str(path), providers=providers)
+        return create_session(path, providers)
 
 
     @staticmethod
@@ -276,7 +275,7 @@ class RuntimeProbe:
 
 
 class RuntimeCache:
-    VERSION = 4
+    VERSION = 5
 
     @staticmethod
     def load(config) -> RuntimeResolution | None:
@@ -333,6 +332,11 @@ class RuntimeCache:
         return {
             "version": RuntimeCache.VERSION,
             "provider_preference": config.provider_preference,
+            "detector_batch_size": config.detector_batch_size,
+            "classifier_batch_size": config.classifier_batch_size,
+            "directml_classifier_batch_size": config.directml_classifier_batch_size,
+            "fixed_batch": config.fixed_batch,
+            "intra_op_threads": config.intra_op_threads,
             "detector_model": RuntimeCache._file_key(config.detector_model),
             "classifier_model": RuntimeCache._file_key(config.classifier_model),
         }

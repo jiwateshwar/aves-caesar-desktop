@@ -39,6 +39,29 @@ def test_prediction_cache_can_load_many_entries_for_model_without_location_match
     assert entries[str(first.resolve()).casefold()]["result"]["birds"] == [{"id": 1}]
 
 
+def test_precomputed_path_keys_keep_fresh_file_validation_and_support_partial_maps(tmp_path, monkeypatch):
+    cache = PredictionCache(tmp_path / "cache.sqlite3")
+    first, second = tmp_path / "first.jpg", tmp_path / "second.jpg"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    for path in (first, second):
+        cache.store(path, "model", "location", {"birds": []})
+    expected = cache.lookup_many_for_model([first, second], "model")
+    keys = {first: str(first.resolve()).casefold()}
+    resolved = []
+    original = cache._path_key
+    def resolve(path):
+        resolved.append(path)
+        return original(path)
+    monkeypatch.setattr(cache, "_path_key", resolve)
+    assert cache.lookup_many_for_model([first, second], "model", path_keys=keys) == expected
+    assert resolved == [second]
+    first.write_bytes(b"changed content and size")
+    assert keys[first] not in cache.lookup_many_for_model([first, second], "model", path_keys=keys)
+    second.unlink()
+    assert cache.lookup_many_for_model([first, second], "model", path_keys=keys) == {}
+
+
 def test_prediction_cache_can_load_entries_under_directory_prefix(tmp_path: Path) -> None:
     cache = PredictionCache(tmp_path / "cache.sqlite3")
     source = tmp_path / "source"

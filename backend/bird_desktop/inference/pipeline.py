@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import csv
 import threading
+import logging
+from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,9 +17,17 @@ from ..runtime.config import RuntimeConfig
 from .onnxruntime_loader import OnnxRuntimeLoader
 from .preprocess import BirdBox, BirdImagePreprocessor, ClassifierCropJob
 from .providers import ProviderSelector, RuntimeResolution, RuntimeResolver
+from .sessions import create_session, stable_classifier_batch_size
+from .metrics import InferenceMetrics
 
 
 DEFAULT_DETECTOR_LABELS = {"14": "bird"}
+
+
+@lru_cache(maxsize=1024)
+def _numeric_metadata(latitude: float | None, longitude: float | None, datetime_text: str | None):
+    return (np.nan if latitude is None else float(latitude), np.nan if longitude is None else float(longitude),
+            GpxService.day_of_year(datetime_text))
 
 
 @dataclass
@@ -42,10 +53,17 @@ class BirdOnnxPipeline:
         self.runtime = runtime or RuntimeResolver.resolve(config)
         self.provider_selection = self.runtime.selection
         self._inference_lock = threading.Lock()
+        self._detector_lock = threading.Lock() if config.concurrent_sessions else self._inference_lock
+        self._classifier_lock = threading.Lock() if config.concurrent_sessions else self._inference_lock
+        self.metrics = InferenceMetrics()
+        self._preparation_pool = ThreadPoolExecutor(max_workers=config.preparation_workers, thread_name_prefix="bird-prepare")
         try:
-            self.detector_session = self._create_session(config.detector_model)
-            self.classifier_session = self._create_session(config.classifier_model)
+            with self.metrics.measure("detector_session_initialization"):
+                self.detector_session = self._create_session(config.detector_model)
+            with self.metrics.measure("classifier_session_initialization"):
+                self.classifier_session = self._create_session(config.classifier_model)
         except Exception:
+            logging.getLogger(__name__).exception("Falling back to CPU while initializing ONNX models")
             self.provider_selection = ProviderSelector.cpu_selection(self.provider_selection)
             self.detector_session = self._create_session(config.detector_model)
             self.classifier_session = self._create_session(config.classifier_model)
@@ -81,10 +99,17 @@ class BirdOnnxPipeline:
 
 
     def _create_session(self, path: Path):
-        OnnxRuntimeLoader.prepare()
-        import onnxruntime as ort
+        batch = self.config.detector_batch_size if path == self.config.detector_model else self.config.classifier_batch_size
+        return create_session(path, self.provider_selection.selected, self.config, batch)
 
-        return ort.InferenceSession(str(path), providers=self.provider_selection.selected)
+
+    def close(self) -> None:
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        self._preparation_pool.shutdown(wait=True)
+        if self.config.profile_directory:
+            self.profile_paths = [session.end_profiling() for session in (self.detector_session, self.classifier_session)]
 
 
     def _active_providers(self) -> list[str]:
@@ -98,13 +123,38 @@ class BirdOnnxPipeline:
 
 
     def _run_detector(self, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
-        with self._inference_lock:
-            return self.detector_session.run(None, feeds)
+        with self.metrics.measure("detector_lock_wait"):
+            self._detector_lock.acquire()
+        try:
+            with self.metrics.measure("detector_inference"):
+                return self.detector_session.run(None, self._padded_feeds(self.detector_session, feeds))
+        finally:
+            self._detector_lock.release()
 
 
     def _run_classifier(self, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
-        with self._inference_lock:
-            return self.classifier_session.run(None, feeds)
+        with self.metrics.measure("classifier_lock_wait"):
+            self._classifier_lock.acquire()
+        try:
+            with self.metrics.measure("classifier_inference"):
+                count = len(next(iter(feeds.values())))
+                padding = stable_classifier_batch_size(self.classifier_session, self.config)
+                return [value[:count] for value in self.classifier_session.run(
+                    None, self._padded_feeds(self.classifier_session, feeds, padding))]
+        finally:
+            self._classifier_lock.release()
+
+
+    @staticmethod
+    def _padded_feeds(session, feeds: dict[str, np.ndarray], dynamic_batch_size: int | None = None) -> dict[str, np.ndarray]:
+        batch = session.get_inputs()[0].shape[0]
+        if not isinstance(batch, int):
+            batch = dynamic_batch_size
+        count = len(next(iter(feeds.values())))
+        if not isinstance(batch, int) or batch <= count:
+            return feeds
+        return {name: np.concatenate((value, np.repeat(value[-1:], batch - count, axis=0)), axis=0)
+                for name, value in feeds.items()}
 
 
     def _detect_birds(self, image: Image.Image) -> list[BirdBox]:
@@ -120,10 +170,25 @@ class BirdOnnxPipeline:
         chunk_size = self._detector_chunk_size()
         for start in range(0, len(images), chunk_size):
             batch_images = images[start:start + chunk_size]
-            tensor, scales = BirdImagePreprocessor.detector_batch(batch_images)
+            with self.metrics.measure("detector_preprocessing"):
+                tensor, scales = BirdImagePreprocessor.detector_batch(batch_images, executor=self._preparation_pool)
             outputs = self._run_detector({input_name: tensor})
             results.extend(self._postprocess_detector_batch(outputs, scales))
 
+        return results
+
+
+    def detect_prepared(self, tensors: list[np.ndarray], scales: list[tuple[float, float]]) -> list[list[BirdBox]]:
+        results = []
+        size = self._detector_chunk_size()
+        input_name = self.detector_session.get_inputs()[0].name
+        for start in range(0, len(tensors), size):
+            chunk = tensors[start:start + size]
+            batch = np.empty((len(chunk), *chunk[0].shape), dtype=np.float32)
+            for index, tensor in enumerate(chunk):
+                batch[index] = tensor
+            outputs = self._run_detector({input_name: batch})
+            results.extend(self._postprocess_detector_batch(outputs, scales[start:start + size]))
         return results
 
 
@@ -154,7 +219,9 @@ class BirdOnnxPipeline:
     def _postprocess_detector_rows(self, boxes: np.ndarray, scores: np.ndarray, labels: np.ndarray, scale: tuple[float, float]) -> list[BirdBox]:
         scale_x, scale_y = scale
         results: list[BirdBox] = []
-        for box, score, label in zip(boxes, scores, labels):
+        # Compare in float64 to preserve the previous Python float threshold semantics.
+        mask = (scores.astype(np.float64) >= self.config.detection_threshold) & (labels == 14)
+        for box, score, label in zip(boxes[mask], scores[mask], labels[mask]):
             score_value = float(score)
             label_key = str(int(label))
             label_name = self.detector_labels.get(label_key, label_key)
@@ -201,11 +268,16 @@ class BirdOnnxPipeline:
 
 
     def _run_classifier_batch(self, images: np.ndarray, metadata: list[tuple[float | None, float | None, str | None]]) -> list[list[dict[str, Any]]]:
+        chunk_size = self._classifier_chunk_size()
+        if len(images) > chunk_size:
+            return [result for start in range(0, len(images), chunk_size)
+                    for result in self._run_classifier_batch(images[start:start + chunk_size], metadata[start:start + chunk_size])]
+        values = np.asarray([_numeric_metadata(*item) for item in metadata], dtype=np.float32)
         feeds = {
             "img": images,
-            "lat": np.array([np.nan if latitude is None else float(latitude) for latitude, _longitude, _datetime_text in metadata], dtype=np.float32),
-            "lon": np.array([np.nan if longitude is None else float(longitude) for _latitude, longitude, _datetime_text in metadata], dtype=np.float32),
-            "day": np.array([GpxService.day_of_year(datetime_text) for _latitude, _longitude, datetime_text in metadata], dtype=np.float32),
+            "lat": np.ascontiguousarray(values[:, 0]),
+            "lon": np.ascontiguousarray(values[:, 1]),
+            "day": np.ascontiguousarray(values[:, 2]),
         }
         return self._classifier_results_from_feeds(feeds)
 
@@ -233,7 +305,9 @@ class BirdOnnxPipeline:
 
 
     def _classifier_chunk_size(self) -> int:
-        return self._session_chunk_size(self.classifier_session, max(1, int(getattr(self.config, "classifier_batch_size", 1))))
+        configured = max(1, int(getattr(self.config, "classifier_batch_size", 1)))
+        configured = stable_classifier_batch_size(self.classifier_session, self.config) or configured
+        return self._session_chunk_size(self.classifier_session, configured)
 
 
     def _detector_chunk_size(self) -> int:

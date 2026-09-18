@@ -20,3 +20,10 @@ def test_runtime_config_loads_from_app_root_and_resolves_models(monkeypatch, tmp
     assert config.detector_model == models_dir / "custom_detector.onnx"
     assert config.classifier_model == models_dir / "bird_classifier.onnx"
     assert config.labels_path == models_dir / "species_mapping_v2.csv"
+    assert config.directml_classifier_batch_size == 4
+
+
+def test_stable_classifier_batches_can_be_disabled(tmp_path):
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps({"directml_classifier_batch_size": 0}), encoding="utf-8")
+    assert RuntimeConfig.load(path).directml_classifier_batch_size == 0
