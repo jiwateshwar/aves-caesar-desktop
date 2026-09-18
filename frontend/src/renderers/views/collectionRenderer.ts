@@ -84,8 +84,8 @@ export class CollectionRenderer {
 
 
 	private renderToolbarActions(): string {
-		if (this.collection.activeJobId) {
-			return `<button id="stopCollectionScan" class="secondary-action" type="button">${iconSquare()}<span>${this.context.text("common.stop")}</span></button>`;
+		if (this.collection.activeJobId || this.collection.stopping) {
+			return `<button id="stopCollectionScan" class="secondary-action" type="button" ${this.collection.stopping ? "disabled" : ""}>${iconSquare()}<span>${this.context.text(this.collection.stopping ? "collection.stopping" : "common.stop")}</span></button>`;
 		}
 
 		return `

@@ -52,7 +52,8 @@ def test_decoder_rejects_invalid_reference_without_corrupting_table(bad):
     assert decoder.decode(CollectionStatusEncoder().encode(snapshot(["valid"]))) == snapshot(["valid"])
 
 
-def test_worker_and_reader_keep_public_status_identical():
+def test_worker_and_reader_keep_public_status_identical(monkeypatch):
+    monkeypatch.setattr("bird_desktop.collection.jobs.workers.stop", lambda _: None)
     stream = io.StringIO()
     worker = CollectionWorker()
     worker._status_writer = WorkerStatusWriter(stream)
@@ -68,8 +69,9 @@ def test_worker_and_reader_keep_public_status_identical():
     assert "_thumbnailValues" not in process.status()
 
 
-def test_invalid_wire_status_reports_error_and_stops_child():
+def test_invalid_wire_status_reports_error_and_stops_child(monkeypatch):
     stopped = []
+    monkeypatch.setattr("bird_desktop.collection.jobs.workers.stop", lambda _: stopped.append(True))
     line = json.dumps({"_collectionTransport": 9}) + "\n"
     process = CollectionProcess(SimpleNamespace(stdout=io.StringIO(line), poll=lambda: None,
                                                 terminate=lambda: stopped.append(True)))

@@ -15,6 +15,8 @@ export class CollectionController implements ViewController {
 	private collectionLoadedSignature: string | null = null;
 	private collectionLoadingSignature: string | null = null;
 	private collectionRefreshRevision = 0;
+	private scanRequestRevision = 0;
+	private scanSettingRevision = 0;
 
 
 	public constructor(private readonly context: AppControllerContext, public readonly state: CollectionState, private readonly detectionState: DetectionState, private readonly speciesCorrectionState: SpeciesCorrectionState, private readonly imageViewportState: ImageViewportState, private readonly detectionController: DetectionController) {}
@@ -199,8 +201,13 @@ export class CollectionController implements ViewController {
 			return;
 		}
 
+		const revision = this.scanRequestRevision;
+		this.state.starting = true;
 		const saved = await this.saveCollectionScanEnabled(true);
-		if (!saved) {
+		this.state.starting = false;
+		if (!saved || revision !== this.scanRequestRevision) {
+			this.state.stopping = false;
+			this.context.render();
 			return;
 		}
 
@@ -209,19 +216,26 @@ export class CollectionController implements ViewController {
 
 
 	public async stopCollectionScan(): Promise<void> {
-		await this.saveCollectionScanEnabled(false);
-		const jobId = this.state.activeJobId;
-		if (!jobId) {
-			this.context.render();
+		if (this.state.stopping) {
 			return;
 		}
-
-		await this.stopActiveCollectionScan(jobId);
+		this.scanRequestRevision += 1;
+		const jobId = this.state.activeJobId;
+		if (!jobId && this.state.starting) {
+			this.state.stopping = true;
+		}
+		// Send Stop immediately; saving the preference must not delay cancellation.
+		await Promise.all([
+			jobId ? this.stopActiveCollectionScan(jobId) : Promise.resolve(),
+			this.saveCollectionScanEnabled(false),
+		]);
 	}
 
 
 	public stopForNavigation(): void {
+		this.scanRequestRevision += 1;
 		if (!this.state.activeJobId) {
+			this.state.stopping = this.state.starting;
 			return;
 		}
 
@@ -408,23 +422,36 @@ export class CollectionController implements ViewController {
 			return;
 		}
 
+		const revision = this.scanRequestRevision;
+		this.state.starting = true;
+		let launchPending = true;
 		this.state.error = "";
 		this.context.render();
 		try {
 			const jobThreshold = this.context.state.settings.acceptedClassificationThreshold;
 			const job = await this.context.apiClient.startCollectionScan(this.state.directory, this.state.scanMode);
-			if (refreshRevision !== null && refreshRevision !== this.collectionRefreshRevision) {
+			if (revision !== this.scanRequestRevision || !this.state.scanEnabled
+				|| (refreshRevision !== null && refreshRevision !== this.collectionRefreshRevision)) {
 				await this.context.apiClient.stopCollectionScan(job.jobId);
 				return;
 			}
 
 			this.collectionJobThreshold = jobThreshold;
 			this.state.startScan(job.jobId);
+			this.state.starting = false;
+			launchPending = false;
 			this.clearDetectionResult();
 			this.context.render();
 			await this.pollCollection(job.jobId);
 		} catch (error) {
-			this.state.applyStatus({ state: "error", total: 0, completed: 0, errors: 1, currentFile: "", message: errorMessage(error), error: errorMessage(error), species: [] });
+			if (revision === this.scanRequestRevision) {
+				this.state.applyStatus({ state: "error", total: 0, completed: 0, errors: 1, currentFile: "", message: errorMessage(error), error: errorMessage(error), species: [] });
+			}
+		} finally {
+			if (launchPending) {
+				this.state.starting = false;
+				this.state.stopping = false;
+			}
 			this.context.render();
 		}
 	}
@@ -458,15 +485,20 @@ export class CollectionController implements ViewController {
 
 
 	private async saveCollectionScanEnabled(enabled: boolean): Promise<boolean> {
+		const revision = ++this.scanSettingRevision;
 		const previousEnabled = this.state.scanEnabled;
 		this.state.scanEnabled = enabled;
 		this.context.render();
 		try {
 			const result = await this.context.apiClient.setCollectionScanEnabled(enabled);
-			this.state.scanEnabled = result.collectionScanEnabled;
+			if (revision === this.scanSettingRevision) {
+				this.state.scanEnabled = result.collectionScanEnabled;
+			}
 			return true;
 		} catch (error) {
-			this.state.scanEnabled = previousEnabled;
+			if (revision === this.scanSettingRevision) {
+				this.state.scanEnabled = previousEnabled;
+			}
 			this.state.error = errorMessage(error);
 			this.context.render();
 			return false;
@@ -475,11 +507,20 @@ export class CollectionController implements ViewController {
 
 
 	private async stopActiveCollectionScan(jobId: string): Promise<void> {
+		if (this.state.stopping) {
+			return;
+		}
+		this.state.stopping = true;
+		this.context.render();
 		try {
-			const status = await this.withSpeciesNames(await this.context.apiClient.stopCollectionScan(jobId));
-			this.state.applyStatus(status);
+			const status = await this.context.apiClient.stopCollectionScan(jobId);
+			if (this.state.activeJobId === jobId) {
+				this.state.applyStatus({ ...status, species: this.state.species() });
+			}
 		} catch (error) {
 			this.state.error = errorMessage(error);
+		} finally {
+			this.state.stopping = false;
 		}
 
 		this.context.render();
@@ -593,6 +634,13 @@ export class CollectionController implements ViewController {
 	private async pollCollection(jobId: string): Promise<void> {
 		while (this.state.activeJobId === jobId) {
 			const status = await this.withSpeciesNames(await this.context.apiClient.collectionStatus(jobId));
+			if (this.state.activeJobId !== jobId) {
+				return;
+			}
+			if (this.state.stopping) {
+				await delay(400);
+				continue;
+			}
 			this.state.applyStatus(status);
 			if (status.state === "running" && this.collectionJobThreshold !== this.context.state.settings.acceptedClassificationThreshold) {
 				await this.refreshRunningCollectionSpecies(jobId);

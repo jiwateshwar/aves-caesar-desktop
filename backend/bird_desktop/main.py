@@ -7,6 +7,7 @@ from PIL import Image
 
 from .api import BirdDesktopApi
 from .runtime.paths import AppPaths
+from .runtime.worker_lifecycle import workers
 
 
 def main() -> None:
@@ -20,9 +21,13 @@ class AppRunner:
             raise RuntimeError(f"Frontend build not found: {index}. Run npm run build first.")
 
         api = BirdDesktopApi()
-        webview.create_window("Aves Caesar", index.as_uri(), js_api=api, width=1120, height=760, min_size=(920, 640))
-        icon = self._window_icon()
-        webview.start(debug=False, icon=str(icon) if icon.exists() else None)
+        try:
+            window = webview.create_window("Aves Caesar", index.as_uri(), js_api=api, width=1120, height=760, min_size=(920, 640))
+            window.events.closed += workers.shutdown
+            icon = self._window_icon()
+            webview.start(debug=False, icon=str(icon) if icon.exists() else None)
+        finally:
+            workers.shutdown()
 
 
     def _window_icon(self) -> Path:

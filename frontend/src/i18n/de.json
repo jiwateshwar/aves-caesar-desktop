@@ -1,4 +1,5 @@
 {
+	"collection.stopping": "Wird angehalten…",
 	"analysis.detected": "{count} erkannt{elapsed}",
 	"analysis.newPhoto": "Neues Foto",
 	"analysis.title": "Erkennungsanalyse",

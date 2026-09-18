@@ -9,6 +9,7 @@ from typing import Any
 from ..inference.providers import RuntimeProbe
 from ..runtime.paths import AppPaths
 from ..runtime.worker_process import WorkerProcessCommand
+from ..runtime.worker_lifecycle import workers
 from .transport import CollectionStatusDecoder
 
 
@@ -16,9 +17,17 @@ class CollectionJobs:
     def __init__(self, runtime_probe: RuntimeProbe):
         self._runtime_probe = runtime_probe
         self._jobs: dict[str, CollectionProcess] = {}
+        self._start_lock = threading.Lock()
 
 
     def start(self, request: dict[str, Any]) -> dict[str, str]:
+        with self._start_lock:
+            if self.has_running():
+                raise RuntimeError("A collection scan is already running.")
+            return self._start(request)
+
+
+    def _start(self, request: dict[str, Any]) -> dict[str, str]:
         job_id = uuid.uuid4().hex
         runtime = self._runtime_probe.runtime()
         request = dict(request)
@@ -66,13 +75,16 @@ class CollectionProcess:
     def start(job_id: str, request: dict[str, Any]) -> "CollectionProcess":
         log_path = AppPaths.logs_dir() / f"collection-{job_id}.log"
         command = WorkerProcessCommand("collection.worker").with_log_path(log_path)
-        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", **WorkerProcessCommand.hidden_window_options())
-        if process.stdin is None:
-            raise RuntimeError("Collection worker stdin is not available.")
-
-        process.stdin.write(json.dumps(request) + "\n")
-        process.stdin.close()
-        return CollectionProcess(process)
+        process = workers.start(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
+        try:
+            if process.stdin is None:
+                raise RuntimeError("Collection worker stdin is not available.")
+            process.stdin.write(json.dumps(request) + "\n")
+            process.stdin.close()
+            return CollectionProcess(process)
+        except BaseException:
+            workers.stop(process)
+            raise
 
 
     def status(self) -> dict[str, Any]:
@@ -82,12 +94,12 @@ class CollectionProcess:
         if status.get("state") in ("done", "stopped", "error", "missing"):
             return status
 
+        if self._stop_requested:
+            return status  # stop() publishes completion only after the entire tree exits.
+
         returncode = self._process.poll()
         if returncode is None:
             return status
-
-        if self._stop_requested:
-            return self._terminal_status("stopped", "Collection scan stopped.")
 
         if returncode != 0:
             return self._terminal_status("error", "Collection worker stopped unexpectedly.")
@@ -96,15 +108,12 @@ class CollectionProcess:
 
 
     def stop(self) -> dict[str, Any]:
-        self._stop_requested = True
-        if self._process.poll() is None:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-                self._process.wait(timeout=2)
-
+        with self._lock:
+            self._stop_requested = True
+        workers.stop(self._process)
+        self._reader.join(timeout=5)
+        if self._reader.is_alive():
+            raise TimeoutError("Collection status reader did not stop")
         return self._terminal_status("stopped", "Collection scan stopped.")
 
 
@@ -113,11 +122,22 @@ class CollectionProcess:
 
 
     def _read_output(self) -> None:
+        try:
+            self._consume_output()
+        finally:
+            workers.stop(self._process)
+            if self._process.stdout is not None:
+                self._process.stdout.close()
+
+
+    def _consume_output(self) -> None:
         if self._process.stdout is None:
             self._terminal_status("error", "Collection worker stdout is not available.")
             return
 
         for line in self._process.stdout:
+            if self._stop_requested:
+                return
             if not line.startswith("{"):
                 continue
 
@@ -130,12 +150,11 @@ class CollectionProcess:
                 payload = self._transport.decode(payload)
             except (ValueError, TypeError, KeyError):
                 self._terminal_status("error", "Invalid collection worker status.")
-                if self._process.poll() is None:
-                    self._process.terminate()
                 return
 
             with self._lock:
-                self._status.update(payload)
+                if not self._stop_requested:
+                    self._status.update(payload)
 
 
     def _terminal_status(self, state: str, message: str) -> dict[str, Any]:

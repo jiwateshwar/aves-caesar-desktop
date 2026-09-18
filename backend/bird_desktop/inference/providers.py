@@ -217,15 +217,17 @@ class RuntimeProbe:
 
         from ..runtime.paths import AppPaths
         from ..runtime.worker_process import WorkerProcessCommand
+        from ..runtime.worker_lifecycle import workers
 
         log_path = AppPaths.logs_dir() / "runtime-probe.log"
         command = WorkerProcessCommand("inference.runtime_probe_worker").with_log_path(log_path)
-        self._process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", **WorkerProcessCommand.hidden_window_options())
+        self._process = workers.start(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
 
 
     def refresh(self) -> None:
-        if self._process is not None and self._process.poll() is None:
-            self._process.terminate()
+        from ..runtime.worker_lifecycle import workers
+        if self._process is not None:
+            workers.stop(self._process)
 
         RuntimeCache.clear()
         self._process = None

@@ -5,6 +5,8 @@ export class CollectionState {
 	public scanMode: CollectionScanMode = "raw_jpeg";
 	public scanEnabled = false;
 	public activeJobId: string | null = null;
+	public starting = false;
+	public stopping = false;
 	public status: CollectionJobStatus | null = null;
 	public error = "";
 	public speciesSearchQuery = "";
@@ -14,7 +16,7 @@ export class CollectionState {
 
 
 	public canScan(): boolean {
-		return Boolean(this.directory.trim() && !this.activeJobId);
+		return Boolean(this.directory.trim() && !this.activeJobId && !this.starting && !this.stopping);
 	}
 
 

@@ -31,6 +31,7 @@ from .runtime.settings import DEFAULT_COLLECTION_SCAN_MODE, MAX_GPX_MATCH_TOLERA
 from .runtime.updates import UpdateService
 from .runtime.version import AppVersion
 from .runtime.worker_process import WorkerProcessCommand
+from .runtime.worker_lifecycle import workers
 
 
 class BirdDesktopApi:
@@ -442,7 +443,9 @@ class PredictionWorkerClient:
 
         log_path = AppPaths.logs_dir() / "prediction-worker.log"
         command = WorkerProcessCommand("prediction_worker").with_log_path(log_path)
-        self._process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", **WorkerProcessCommand.hidden_window_options())
+        if self._process is not None:
+            workers.stop(self._process)
+        self._process = workers.start(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
         return self._process
 
 

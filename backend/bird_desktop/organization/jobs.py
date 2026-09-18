@@ -9,6 +9,7 @@ from typing import Any
 from ..inference.providers import RuntimeProbe
 from ..runtime.paths import AppPaths
 from ..runtime.worker_process import WorkerProcessCommand
+from ..runtime.worker_lifecycle import workers
 
 
 class BatchJobs:
@@ -64,7 +65,7 @@ class BatchProcess:
     def start(job_id: str, request: dict[str, Any]) -> "BatchProcess":
         log_path = AppPaths.logs_dir() / f"batch-{job_id}.log"
         command = WorkerProcessCommand("organization.worker").with_log_path(log_path)
-        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", **WorkerProcessCommand.hidden_window_options())
+        process = workers.start(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
         if process.stdin is None:
             raise RuntimeError("Batch worker stdin is not available.")
 
@@ -95,13 +96,7 @@ class BatchProcess:
 
     def stop(self) -> dict[str, Any]:
         self._stop_requested = True
-        if self._process.poll() is None:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-                self._process.wait(timeout=2)
+        workers.stop(self._process)
 
         return self._terminal_status("stopped", "Batch sorting stopped.")
 
@@ -125,7 +120,8 @@ class BatchProcess:
                 continue
 
             with self._lock:
-                self._status.update(payload)
+                if not self._stop_requested:
+                    self._status.update(payload)
 
 
     def _terminal_status(self, state: str, message: str) -> dict[str, Any]:
