@@ -7,8 +7,6 @@ export class CollectionState {
 	public activeJobId: string | null = null;
 	public status: CollectionJobStatus | null = null;
 	public error = "";
-	public startedAtMs: number | null = null;
-	public etaCompletedBaseline = 0;
 	public speciesSearchQuery = "";
 	public selectedSpeciesId: string | null = null;
 	public selectedOccurrenceIndex = 0;
@@ -24,8 +22,6 @@ export class CollectionState {
 		const previousStatus = this.status;
 		this.activeJobId = jobId;
 		this.error = "";
-		this.startedAtMs = Date.now();
-		this.etaCompletedBaseline = previousStatus?.completed ?? 0;
 		this.status = { state: "running", total: previousStatus?.total ?? 0, completed: previousStatus?.completed ?? 0, errors: previousStatus?.errors ?? 0, currentFile: "", message: "", species: previousStatus?.species ?? [] };
 		this.speciesSearchQuery = "";
 		this.selectedSpeciesId = null;
@@ -51,7 +47,6 @@ export class CollectionState {
 		this.error = status.state === "error" ? status.error || status.message : "";
 		if (status.state !== "running") {
 			this.activeJobId = null;
-			this.etaCompletedBaseline = 0;
 		}
 	}
 
@@ -63,7 +58,6 @@ export class CollectionState {
 		this.selectedOccurrenceIndex = 0;
 		this.occurrenceOpen = false;
 		this.error = "";
-		this.etaCompletedBaseline = 0;
 	}
 
 
@@ -175,26 +169,21 @@ export class CollectionState {
 
 
 	public estimatedFinishMs(nowMs = Date.now()): number | null {
-		if (!this.status || this.status.state !== "running" || this.startedAtMs === null) {
+		if (!this.status || this.status.state !== "running") {
 			return null;
 		}
 
-		if (this.status.total <= 0 || this.status.completed <= 0 || this.status.completed >= this.status.total) {
+		const { total, cached, processed, processingElapsedSeconds } = this.status;
+		if (cached === undefined || processed === undefined || processingElapsedSeconds === undefined
+			|| ![total, cached, processed, processingElapsedSeconds].every(Number.isFinite)
+			|| cached < 0 || processed <= 0 || processingElapsedSeconds <= 0) {
 			return null;
 		}
 
-		const elapsedMs = nowMs - this.startedAtMs;
-		if (elapsedMs <= 0) {
-			return null;
-		}
-
-		const completedSinceStart = this.status.completed - this.etaCompletedBaseline;
-		if (completedSinceStart <= 0) {
-			return null;
-		}
-
-		const averageMsPerImage = elapsedMs / completedSinceStart;
-		const remainingImages = this.status.total - this.status.completed;
-		return nowMs + averageMsPerImage * remainingImages;
+		// Use this worker's measurements even when the UI retains an older collection.
+		const remainingImages = total - cached - processed;
+		return remainingImages > 0
+			? nowMs + processingElapsedSeconds * 1000 / processed * remainingImages
+			: null;
 	}
 }

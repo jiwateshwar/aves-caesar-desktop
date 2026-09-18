@@ -61,10 +61,17 @@ class CollectionWorker:
         processed_images: list[Path] = []
         total = len(images)
         completed = self._reuse_cached_predictions(images, cached_predictions_by_image, threshold, store, indexer, processed_images, image_keys)
+        cached = completed
         errors = 0
-        initial_status = {"state": "running", "total": total, "completed": completed, "errors": errors, "currentFile": "", "message": f"Found {total} image(s).", "species": indexer.species()}
+        initial_status = {"state": "running", "total": total, "completed": completed, "cached": cached, "processed": 0, "processingElapsedSeconds": 0, "errors": errors, "currentFile": "", "message": f"Found {total} image(s).", "species": indexer.species()}
         self._write(initial_status)
         last_publication = time.monotonic()
+        processing_started = last_publication
+
+        def progress() -> dict[str, Any]:
+            # Cache discovery/reuse is not representative of inference throughput.
+            return {"cached": cached, "processed": completed - cached,
+                    "processingElapsedSeconds": time.monotonic() - processing_started}
 
         service = self._prediction_service_for_runtime(runtime)
         self._model_fingerprint = model_fingerprint
@@ -72,7 +79,7 @@ class CollectionWorker:
         missing_images = [image_path for image_path in images if image_keys[image_path] not in cached_predictions_by_image]
         self._write_log({"event": "prediction_plan", "total": total, "cached": completed, "missing": len(missing_images), "providers": runtime.selection.selected})
         if missing_images:
-            self._write({"state": "running", "total": total, "completed": completed, "errors": errors, "currentFile": str(missing_images[0]), "message": f"Processing {len(missing_images)} image(s).", "species": indexer.species()})
+            self._write({"state": "running", "total": total, "completed": completed, **progress(), "errors": errors, "currentFile": str(missing_images[0]), "message": f"Processing {len(missing_images)} image(s).", "species": indexer.species()})
 
         for image_path, result, error in self._prediction_results_for_chunk(missing_images, service, threshold):
             current_file = str(image_path)
@@ -88,11 +95,11 @@ class CollectionWorker:
                 errors += 1
             completed += 1
             if time.monotonic() - last_publication >= 0.4:
-                status = {"state": "running", "total": total, "completed": completed, "errors": errors, "currentFile": current_file, "message": str(error) if error else "Collection scan running.", "species": indexer.species()}
+                status = {"state": "running", "total": total, "completed": completed, **progress(), "errors": errors, "currentFile": current_file, "message": str(error) if error else "Collection scan running.", "species": indexer.species()}
                 self._write(status)
                 last_publication = time.monotonic()
 
-        status = {"state": "done", "total": total, "completed": completed, "errors": errors, "currentFile": "", "message": "Collection scan complete.", "species": indexer.species()}
+        status = {"state": "done", "total": total, "completed": completed, **progress(), "errors": errors, "currentFile": "", "message": "Collection scan complete.", "species": indexer.species()}
         self._write(status)
 
 

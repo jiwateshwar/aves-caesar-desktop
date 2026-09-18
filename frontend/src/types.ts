@@ -287,6 +287,9 @@ export type CollectionJobStatus = {
 	state: "running" | "done" | "stopped" | "error" | "missing";
 	total: number;
 	completed: number;
+	cached?: number;
+	processed?: number;
+	processingElapsedSeconds?: number;
 	errors: number;
 	currentFile: string;
 	message: string;
