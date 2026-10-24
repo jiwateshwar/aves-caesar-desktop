@@ -91,6 +91,15 @@ def verify(bundle_path: Path) -> None:
         check = "import aves_server.inference_node, aves_server.tray, aves_server.engine"
         result = subprocess.run([sys.executable, "-I", "-c", f"import sys; sys.path[:0] = {[str(top / 'server'), str(top / 'backend')]!r}; {check}"],
                                 capture_output=True, text=True)
+        if result.returncode == 0:
+            # Run the launcher's own startup code (path lookup and imports), stopping just before the tray opens.
+            launcher = (top / "aves-node-tray.pyw").read_text(encoding="utf-8").replace("\nmain(root, Path(__file__).resolve())", "\nprint(root)")
+            probe = top / "launcher_check.py"
+            probe.write_text(launcher, encoding="utf-8")
+            result = subprocess.run([sys.executable, "-I", str(probe)], capture_output=True, text=True)
+            if result.returncode == 0 and Path(result.stdout.strip()).resolve() != top.resolve():
+                result = subprocess.CompletedProcess(result.args, 1, "", f"launcher found the wrong folder: {result.stdout.strip()}")
+            probe.unlink()
         if result.returncode != 0:
             bundle_path.unlink()
             raise SystemExit(f"The bundle is incomplete; the node would not start:\n{result.stderr.strip()}")
