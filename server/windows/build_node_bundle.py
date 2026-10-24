@@ -20,6 +20,7 @@ INCLUDE = [
     ("server/windows/featherbase-icon.png", "icon.png"),
     ("backend/bird_desktop", "backend/bird_desktop"),
     ("server/aves_server/__init__.py", "server/aves_server/__init__.py"),
+    ("server/aves_server/brand.py", "server/aves_server/brand.py"),
     ("server/aves_server/engine.py", "server/aves_server/engine.py"),
     ("server/aves_server/inference_node.py", "server/aves_server/inference_node.py"),
     ("server/aves_server/tray.py", "server/aves_server/tray.py"),
@@ -73,7 +74,26 @@ def main() -> None:
                 relative = path.relative_to(source) if source.is_dir() else Path()
                 bundle.write(path, f"{TOP}/{target_name}/{relative.as_posix()}".rstrip("/.") if source.is_dir() else f"{TOP}/{target_name}")
         bundle.writestr(f"{TOP}/README.txt", README.replace("\n", "\r\n"))
+    verify(OUTPUT)
     print(f"Wrote {OUTPUT} ({OUTPUT.stat().st_size / 1e6:.1f} MB)")
+
+
+def verify(bundle_path: Path) -> None:
+    """Imports the node and tray modules from the extracted bundle alone, so a missing file fails here, not on the PC."""
+    import subprocess
+    import sys
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as folder:
+        with zipfile.ZipFile(bundle_path) as bundle:
+            bundle.extractall(folder)
+        top = Path(folder) / TOP
+        check = "import aves_server.inference_node, aves_server.tray, aves_server.engine"
+        result = subprocess.run([sys.executable, "-I", "-c", f"import sys; sys.path[:0] = {[str(top / 'server'), str(top / 'backend')]!r}; {check}"],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            bundle_path.unlink()
+            raise SystemExit(f"The bundle is incomplete; the node would not start:\n{result.stderr.strip()}")
 
 
 if __name__ == "__main__":
