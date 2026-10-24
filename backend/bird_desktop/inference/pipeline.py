@@ -5,7 +5,7 @@ import threading
 import logging
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +51,6 @@ class BirdOnnxPipeline:
         self.class_ids = self._load_class_ids(config.labels_path)
         self.detector_labels = dict(DEFAULT_DETECTOR_LABELS)
         self.runtime = runtime or RuntimeResolver.resolve(config)
-        self.provider_selection = self.runtime.selection
         self._inference_lock = threading.Lock()
         self._detector_lock = threading.Lock() if config.concurrent_sessions else self._inference_lock
         self._classifier_lock = threading.Lock() if config.concurrent_sessions else self._inference_lock
@@ -60,12 +59,17 @@ class BirdOnnxPipeline:
         try:
             with self.metrics.measure("detector_session_initialization"):
                 self.detector_session = self._create_session(config.detector_model)
+        except Exception:
+            logging.getLogger(__name__).exception("Falling back to CPU while initializing the detector ONNX model")
+            self.runtime = replace(self.runtime, detector_selection=ProviderSelector.cpu_selection(self.runtime.detector_selection))
+            self.detector_session = self._create_session(config.detector_model)
+
+        try:
             with self.metrics.measure("classifier_session_initialization"):
                 self.classifier_session = self._create_session(config.classifier_model)
         except Exception:
-            logging.getLogger(__name__).exception("Falling back to CPU while initializing ONNX models")
-            self.provider_selection = ProviderSelector.cpu_selection(self.provider_selection)
-            self.detector_session = self._create_session(config.detector_model)
+            logging.getLogger(__name__).exception("Falling back to CPU while initializing the classifier ONNX model")
+            self.runtime = replace(self.runtime, classifier_selection=ProviderSelector.cpu_selection(self.runtime.classifier_selection))
             self.classifier_session = self._create_session(config.classifier_model)
 
 
@@ -99,8 +103,10 @@ class BirdOnnxPipeline:
 
 
     def _create_session(self, path: Path):
-        batch = self.config.detector_batch_size if path == self.config.detector_model else self.config.classifier_batch_size
-        return create_session(path, self.provider_selection.selected, self.config, batch)
+        is_detector = path == self.config.detector_model
+        batch = self.config.detector_batch_size if is_detector else self.config.classifier_batch_size
+        providers = self.runtime.detector_selection.selected if is_detector else self.runtime.classifier_selection.selected
+        return create_session(path, providers, self.config, batch)
 
 
     def close(self) -> None:

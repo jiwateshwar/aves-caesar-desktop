@@ -1,0 +1,80 @@
+# Aves Caesar workflow — Portainer stack for TrueNAS SCALE.
+#
+# Set the variables below in Portainer's "Environment variables" section (see stack.env.example).
+# PHOTOS_DATASET must contain both the dumpsite and the published folder: mounting them as ONE volume
+# lets the app move files instantly (a rename) instead of copying gigabytes between mounts.
+
+name: aves-caesar
+
+x-app: &app
+  image: ${AVES_IMAGE:-aves-caesar-workflow:latest}
+  build:
+    context: ..
+    dockerfile: server/Dockerfile
+    args:
+      # onnxruntime>=1.20 gives a ~2 GB smaller image for a NAS without an NVIDIA card.
+      ONNXRUNTIME: ${ONNXRUNTIME:-onnxruntime-gpu[cuda,cudnn]>=1.20}
+  # Rebuild on every (re)deploy, so Portainer's automatic Git updates pick up new code. Unchanged layers are cached.
+  pull_policy: build
+  user: "${PUID:-568}:${PGID:-568}"
+  restart: unless-stopped
+  environment: &app-env
+    AVES_DATABASE_URL: postgresql+psycopg://aves:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/aves
+    AVES_DUMP_DIR: /data/photos/${DUMP_FOLDER:-Dumpsite}
+    AVES_PUBLISHED_DIR: /data/photos/${PUBLISHED_FOLDER:-Published Pics}
+    AVES_DATA_DIR: /data/appdata
+    AVES_PASSWORD: ${AVES_PASSWORD:-}
+    TZ: ${TZ:-UTC}
+  volumes:
+    - ${PHOTOS_DATASET:?set PHOTOS_DATASET}:/data/photos
+    - ${APPDATA_PATH:?set APPDATA_PATH}:/data/appdata
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aves
+      POSTGRES_USER: aves
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      TZ: ${TZ:-UTC}
+    volumes:
+      # A Docker-managed volume: Postgres must own its data folder, which TrueNAS dataset ACLs often prevent.
+      - aves-db:/var/lib/postgresql/data
+    # Other applications can read the photo database here (views: v_published_photos, v_species_sightings).
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aves -d aves"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    <<: *app
+    command: ["web"]
+    ports:
+      - "${AVES_PORT:-8095}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    # Runs on the CPU as is. For an NVIDIA card in the NAS, add compose.nvidia.yaml (see README).
+    environment:
+      <<: *app-env
+      AVES_PROVIDER: ${AVES_PROVIDER:-auto}
+      # Optional: use the GPU of another PC running the inference node (server/windows/).
+      AVES_REMOTE_URL: ${AVES_REMOTE_URL:-}
+      AVES_REMOTE_TOKEN: ${AVES_REMOTE_TOKEN:-}
+      AVES_REMOTE_FALLBACK: ${AVES_REMOTE_FALLBACK:-local}
+
+volumes:
+  aves-db:

@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "app": "python scripts/dev/run.py",
+    "app": "python3 scripts/dev/run.py || python scripts/dev/run.py",
     "start": "npm run app",
     "build": "vite build",
     "typecheck": "tsc --noEmit"

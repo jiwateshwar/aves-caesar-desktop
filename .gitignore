@@ -34,3 +34,11 @@ Thumbs.db
 logs/
 cache/
 AGENTS.md
+
+# Workflow server
+server/aves_server/static/
+.venv-node/
+node-token.txt
+
+# Local deployment credentials (never commit)
+.secrets/

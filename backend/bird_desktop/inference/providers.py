@@ -24,6 +24,14 @@ class ProviderSelection:
 @dataclass(frozen=True)
 class RuntimeResolution:
     selection: ProviderSelection
+    detector_selection: ProviderSelection | None = None
+    classifier_selection: ProviderSelection | None = None
+
+    def __post_init__(self) -> None:
+        if self.detector_selection is None:
+            object.__setattr__(self, "detector_selection", self.selection)
+        if self.classifier_selection is None:
+            object.__setattr__(self, "classifier_selection", self.selection)
 
 
 class ProviderSelector:
@@ -63,13 +71,16 @@ class ProviderSelector:
         if preference == "coreml":
             return ["CoreMLExecutionProvider", "CPUExecutionProvider"]
 
+        if preference == "cuda":
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
         if system == "windows":
             return ["DmlExecutionProvider", "CPUExecutionProvider"]
 
         if system == "darwin":
             return ["CoreMLExecutionProvider", "CPUExecutionProvider"]
 
-        return ["CPUExecutionProvider"]
+        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 
 class RuntimeResolver:
@@ -78,34 +89,56 @@ class RuntimeResolver:
         selection = ProviderSelector.select(config.provider_preference)
         preferred = RuntimeResolver._preferred_provider(selection)
         if preferred == "CPUExecutionProvider":
-            return RuntimeResolution(selection=ProviderSelector.cpu_selection(selection))
+            cpu = ProviderSelector.cpu_selection(selection)
+            return RuntimeResolution(selection=cpu, detector_selection=cpu, classifier_selection=cpu)
 
-        try:
-            effective = RuntimeResolver._effective_selection(config, selection)
-            return RuntimeResolution(selection=effective)
-        except Exception:
-            return RuntimeResolution(selection=ProviderSelector.cpu_selection(selection))
+        detector_selection = RuntimeResolver._resolve_detector(config, selection)
+        classifier_selection = RuntimeResolver._resolve_classifier(config, selection)
+        overall = RuntimeResolver._overall_selection(detector_selection, classifier_selection)
+        return RuntimeResolution(selection=overall, detector_selection=detector_selection, classifier_selection=classifier_selection)
 
 
     @staticmethod
     def encode(runtime: RuntimeResolution) -> str:
-        return json.dumps({"selection": asdict(runtime.selection)}, ensure_ascii=True)
+        return json.dumps({
+            "selection": asdict(runtime.selection),
+            "detectorSelection": asdict(runtime.detector_selection),
+            "classifierSelection": asdict(runtime.classifier_selection),
+        }, ensure_ascii=True)
 
 
     @staticmethod
     def decode(value: str) -> RuntimeResolution:
         data = json.loads(value)
-        return RuntimeResolution(selection=ProviderSelector.from_dict(data["selection"]))
+        detector = ProviderSelector.from_dict(data["detectorSelection"]) if "detectorSelection" in data else None
+        classifier = ProviderSelector.from_dict(data["classifierSelection"]) if "classifierSelection" in data else None
+        return RuntimeResolution(selection=ProviderSelector.from_dict(data["selection"]), detector_selection=detector, classifier_selection=classifier)
 
 
     @staticmethod
-    def _effective_selection(config, selection: ProviderSelection) -> ProviderSelection:
-        detector_session = create_session(config.detector_model, selection.selected, config, config.detector_batch_size)
-        classifier_session = create_session(config.classifier_model, selection.selected, config, config.classifier_batch_size)
-        RuntimeResolver._smoke_detector(detector_session, max(1, int(getattr(config, "detector_batch_size", 1))))
-        classifier_batch = stable_classifier_batch_size(classifier_session, config) or max(1, config.classifier_batch_size)
-        RuntimeResolver._smoke_classifier(classifier_session, config.crop_size, classifier_batch)
-        providers = RuntimeResolver._session_providers([detector_session, classifier_session])
+    def _resolve_detector(config, selection: ProviderSelection) -> ProviderSelection:
+        try:
+            session = create_session(config.detector_model, selection.selected, config, config.detector_batch_size)
+            RuntimeResolver._smoke_detector(session, max(1, int(getattr(config, "detector_batch_size", 1))))
+            return RuntimeResolver._intersect(selection, session)
+        except Exception:
+            return ProviderSelector.cpu_selection(selection)
+
+
+    @staticmethod
+    def _resolve_classifier(config, selection: ProviderSelection) -> ProviderSelection:
+        try:
+            session = create_session(config.classifier_model, selection.selected, config, config.classifier_batch_size)
+            classifier_batch = stable_classifier_batch_size(session, config) or max(1, config.classifier_batch_size)
+            RuntimeResolver._smoke_classifier(session, config.crop_size, classifier_batch)
+            return RuntimeResolver._intersect(selection, session)
+        except Exception:
+            return ProviderSelector.cpu_selection(selection)
+
+
+    @staticmethod
+    def _intersect(selection: ProviderSelection, session) -> ProviderSelection:
+        providers = session.get_providers()
         selected = [provider for provider in selection.selected if provider in providers]
         if "CPUExecutionProvider" not in selected:
             selected.append("CPUExecutionProvider")
@@ -114,14 +147,12 @@ class RuntimeResolver:
 
 
     @staticmethod
-    def _session_providers(sessions: list) -> list[str]:
-        providers = []
-        for session in sessions:
-            for provider in session.get_providers():
-                if provider not in providers:
-                    providers.append(provider)
+    def _overall_selection(detector_selection: ProviderSelection, classifier_selection: ProviderSelection) -> ProviderSelection:
+        for candidate in (classifier_selection, detector_selection):
+            if candidate.selected and candidate.selected[0] != "CPUExecutionProvider":
+                return candidate
 
-        return providers
+        return detector_selection
 
 
     @staticmethod

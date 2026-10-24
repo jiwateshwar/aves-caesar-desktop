@@ -1,0 +1,19 @@
+# Add-on for an NVIDIA card inside the NAS. Use together with compose.yaml:
+#   Portainer (Repository stack): add "server/compose.nvidia.yaml" under "Additional paths".
+#   Command line: docker compose -f compose.yaml -f compose.nvidia.yaml up -d
+# Without the card (or the NVIDIA driver in TrueNAS Apps settings) the worker won't start with this file,
+# so leave it out on machines without one; compose.yaml alone falls back to the CPU.
+
+services:
+  worker:
+    environment:
+      AVES_PROVIDER: ${AVES_PROVIDER:-cuda}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

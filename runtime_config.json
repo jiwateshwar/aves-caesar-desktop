@@ -10,5 +10,5 @@
   "detector_batch_size": 4,
   "classifier_batch_size": 32,
   "directml_classifier_batch_size": 4,
-  "provider_preference": "directml"
+  "provider_preference": "coreml"
 }

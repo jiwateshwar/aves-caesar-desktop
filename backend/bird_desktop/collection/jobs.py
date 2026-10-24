@@ -32,6 +32,8 @@ class CollectionJobs:
         runtime = self._runtime_probe.runtime()
         request = dict(request)
         request["_runtimeSelection"] = runtime.selection.__dict__
+        request["_detectorSelection"] = runtime.detector_selection.__dict__
+        request["_classifierSelection"] = runtime.classifier_selection.__dict__
         self._jobs[job_id] = CollectionProcess.start(job_id, request)
         return {"jobId": job_id}
 

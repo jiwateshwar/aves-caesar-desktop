@@ -428,6 +428,8 @@ class PredictionWorkerClient:
     def _predict(self, request: dict[str, Any], runtime_probe: RuntimeProbe) -> dict[str, Any]:
         runtime = runtime_probe.runtime()
         request["_runtimeSelection"] = runtime.selection.__dict__
+        request["_detectorSelection"] = runtime.detector_selection.__dict__
+        request["_classifierSelection"] = runtime.classifier_selection.__dict__
         process = self._ensure_process()
         if process.stdin is None or process.stdout is None:
             raise RuntimeError("Prediction worker is not available.")

@@ -39,6 +39,8 @@ class CollectionWorker:
             request = json.loads(line)
             runtime = self._runtime_from_request(request)
             request.pop("_runtimeSelection", None)
+            request.pop("_detectorSelection", None)
+            request.pop("_classifierSelection", None)
             self._run_collection(request, runtime)
         except Exception as exc:
             payload = self._error_status(str(exc))
@@ -186,14 +188,24 @@ class CollectionWorker:
 
     def _runtime_from_request(self, request: dict[str, Any]) -> RuntimeResolution:
         selection = request.get("_runtimeSelection")
-        if isinstance(selection, dict):
-            return RuntimeResolution(selection=ProviderSelector.from_dict(selection))
+        if not isinstance(selection, dict):
+            return RuntimeResolution(selection=ProviderSelector.from_dict({"selected": ["CPUExecutionProvider"]}))
 
-        return RuntimeResolution(selection=ProviderSelector.from_dict({"selected": ["CPUExecutionProvider"]}))
+        detector = request.get("_detectorSelection")
+        classifier = request.get("_classifierSelection")
+        return RuntimeResolution(
+            selection=ProviderSelector.from_dict(selection),
+            detector_selection=ProviderSelector.from_dict(detector) if isinstance(detector, dict) else None,
+            classifier_selection=ProviderSelector.from_dict(classifier) if isinstance(classifier, dict) else None,
+        )
 
 
     def _prediction_service_for_runtime(self, runtime: RuntimeResolution) -> PredictionService:
-        runtime_key = json.dumps(runtime.selection.__dict__, sort_keys=True)
+        runtime_key = json.dumps({
+            "selection": runtime.selection.__dict__,
+            "detector": runtime.detector_selection.__dict__,
+            "classifier": runtime.classifier_selection.__dict__,
+        }, sort_keys=True)
         if self._prediction_service is None or self._runtime_key != runtime_key:
             self._prediction_service = PredictionService(RuntimeConfig.load(), forced_runtime=runtime)
             self._runtime_key = runtime_key

@@ -35,6 +35,10 @@ class AppPaths:
 
     @staticmethod
     def models_dir() -> Path:
+        override = os.environ.get("AVES_MODELS_DIR")
+        if override:
+            return Path(override)
+
         if getattr(sys, "frozen", False):
             return AppPaths.resources_dir() / "models"
 

@@ -11,7 +11,7 @@ def test_collection_manager_rejects_duplicate_scan(monkeypatch):
     launches = []
     job = SimpleNamespace(running=lambda: True)
     monkeypatch.setattr(CollectionProcess, "start", lambda *args: launches.append(args) or job)
-    runtime = SimpleNamespace(selection=SimpleNamespace(selected=[]))
+    runtime = SimpleNamespace(selection=SimpleNamespace(selected=[]), detector_selection=SimpleNamespace(selected=[]), classifier_selection=SimpleNamespace(selected=[]))
     jobs = CollectionJobs(SimpleNamespace(runtime=lambda: runtime))
     jobs.start({})
     with pytest.raises(RuntimeError, match="already running"):
