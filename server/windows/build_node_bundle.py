@@ -15,10 +15,13 @@ TOP = "aves-inference-node"
 
 INCLUDE = [
     ("server/windows/start-inference-node.ps1", "start-inference-node.ps1"),
+    ("server/windows/aves-node-tray.pyw", "aves-node-tray.pyw"),
+    ("icon.png", "icon.png"),
     ("backend/bird_desktop", "backend/bird_desktop"),
     ("server/aves_server/__init__.py", "server/aves_server/__init__.py"),
     ("server/aves_server/engine.py", "server/aves_server/engine.py"),
     ("server/aves_server/inference_node.py", "server/aves_server/inference_node.py"),
+    ("server/aves_server/tray.py", "server/aves_server/tray.py"),
     ("scripts/models/download_release_models.py", "scripts/models/download_release_models.py"),
     ("model-version.json", "model-version.json"),
     ("runtime_config.json", "runtime_config.json"),
@@ -40,6 +43,11 @@ Lends this PC's graphics card to the Aves Caesar workflow server on your NAS.
        powershell -ExecutionPolicy Bypass -File C:\\AvesNode\\start-inference-node.ps1
 4. Copy the AVES_REMOTE_URL (your home-network address) and AVES_REMOTE_TOKEN it prints into the
    NAS stack's environment variables and redeploy the stack.
+
+It then runs in the system tray and starts by itself whenever you sign in to Windows. Right-click the
+icon to pause it (frees the graphics card's memory; the NAS uses its own processor meanwhile), resume,
+turn "Start with Windows" off, or quit. To update, unzip the new version over this folder and run
+step 3 again; the models and token are kept.
 
 Licensed under the GNU AGPL v3 or later; see LICENSE.txt.
 """

@@ -134,8 +134,23 @@ When the PC is off or asleep, the worker falls back to its own processor and tri
 Set `AVES_REMOTE_FALLBACK=wait` to hold photos in *Queued* until the PC is back instead. That suits a NAS with
 a weak CPU or little memory, because the NAS never loads the models itself. The PC and the NAS must use the
 same model version (`model-version.json`); the NAS refuses a node with different models, because species
-IDs could differ. To start the node with Windows, create a Task Scheduler task that runs the command in
-step 3 "At log on".
+IDs could differ.
+
+After setup the node runs as a **tray app** and starts by itself whenever you sign in to Windows. Right-click
+the Aves Caesar icon to:
+- **Pause** it. This unloads the models and frees the graphics card's memory, e.g. for gaming or editing.
+  The NAS treats a paused PC like a switched-off one. **Resume** loads the models again in a few seconds.
+- Turn **Start with Windows** on or off.
+- Open the node's folder (token, settings) or its log.
+- **Quit**.
+
+The icon's dot shows the state: green means running, yellow means loading, grey means paused, red means
+error. Hovering shows how many photos it has identified.
+
+To update the node, unzip a newer `aves-inference-node.zip` over the same folder and run the setup command
+again. The models and token are kept, and the running copy is replaced. Use `-Foreground` to run it in the
+console instead, and `-NoAutostart` to skip starting with Windows. Build the zip with
+`python server/windows/build_node_bundle.py`.
 
 ### Updating
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 
 import pytest
@@ -176,3 +177,38 @@ def test_waiting_for_the_node_does_not_count_as_a_failed_attempt(scanner, clock,
         analyzer.analyse_pending()
     with database.session() as db:
         assert db.scalar(select(Shot)).analysis_attempts == 0
+
+
+def test_pausing_the_node_unloads_the_models_and_the_nas_treats_it_as_offline(models_dir):
+    from aves_server.inference_node import NodeBackend
+
+    loaded = []
+    node = NodeBackend(models_dir, "directml", factory=lambda _models, _provider: loaded.append(1) or FakeBackend())
+    node.start(wait=True)
+    remote = _remote(models_dir, node)
+    item = [PipelineInput(Image.new("RGB", (32, 32), (0, 90, 0)), None, None, None)]
+    assert node.state == "running" and len(remote.predict_many(item)) == 1 and node.served == 1
+
+    node.pause()
+    assert node.state == "paused" and node._backend is None
+    with pytest.raises(RemoteUnavailable, match="paused"):
+        remote.predict_many(item)
+
+    node.resume()
+    for _ in range(100):
+        if node.state == "running":
+            break
+        time.sleep(0.01)
+    assert node.state == "running" and len(loaded) == 2
+    assert len(remote.predict_many(item)) == 1
+
+
+def test_models_that_fail_to_load_put_the_node_in_error(models_dir):
+    from aves_server.inference_node import NodeBackend
+
+    def broken(_models, _provider):
+        raise RuntimeError("no DirectML device")
+
+    node = NodeBackend(models_dir, "directml", factory=broken)
+    node.start(wait=True)
+    assert (node.state, node.error) == ("error", "no DirectML device")

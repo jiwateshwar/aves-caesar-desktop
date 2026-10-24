@@ -4,7 +4,10 @@
   Unzip aves-inference-node.zip anywhere (or use a clone of the repository), then in PowerShell:
       powershell -ExecutionPolicy Bypass -File <folder>\start-inference-node.ps1
 
-  The first run sets everything up (Python packages, ~1.8 GB of models) and creates a token.
+  The first run sets everything up (Python packages, ~1.8 GB of models) and creates a token. It then
+  registers the node to start with Windows and starts it in the system tray (right-click the icon to
+  pause, resume or quit). Run the script again any time to update; -Foreground runs it in this window
+  instead, and -NoAutostart skips starting with Windows.
   Put that token and this PC's address into the stack variables on the NAS:
       AVES_REMOTE_URL=http://<this-pc>:8096
       AVES_REMOTE_TOKEN=<token>
@@ -12,7 +15,9 @@
 #>
 param(
     [int]$Port = 8096,
-    [string]$Provider = "directml"
+    [string]$Provider = "directml",
+    [switch]$Foreground,
+    [switch]$NoAutostart
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,7 +65,7 @@ Step "Installing or updating packages"
 Run "Updating pip" { & $Python -m pip install --quiet --upgrade pip }
 Run "Installing packages" {
     & $Python -m pip install --quiet "numpy>=1.26" "Pillow>=10.0" "pillow-heif>=0.20" "gpxpy>=1.6" "onnxruntime-directml>=1.19" `
-        "fastapi>=0.115" "uvicorn>=0.30" "python-multipart>=0.0.9"
+        "fastapi>=0.115" "uvicorn>=0.30" "python-multipart>=0.0.9" "pystray>=0.19"
 }
 
 if (-not (Test-Path (Join-Path $Models "model-build-info.json"))) {
@@ -92,6 +97,28 @@ foreach ($address in $addresses) { Write-Host "  AVES_REMOTE_URL=http://${addres
 Write-Host "  AVES_REMOTE_TOKEN=$Token   (also saved in $TokenFile)"
 Write-Host ""
 
+@{ port = $Port; provider = $Provider } | ConvertTo-Json | Set-Content (Join-Path $Root "node-config.json")
 $env:PYTHONPATH = "$Root\server;$Root\backend"
-Step "Starting the inference node on port $Port (Ctrl+C to stop)"
-& $Python -m aves_server.inference_node --models $Models --token $Token --port $Port --provider $Provider
+
+# Stop a node that is already running (the tray app, or one started in a console with an older version of
+# this script), so the new code and settings take effect and the port is free.
+Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe' OR Name = 'python.exe'" |
+    Where-Object { $_.CommandLine -like "*aves-node-tray.pyw*" -or $_.CommandLine -like "*aves_server.inference_node*" } |
+    ForEach-Object { Step "Stopping the running node (process $($_.ProcessId))"; Stop-Process -Id $_.ProcessId -Force }
+
+if ($Foreground) {
+    Step "Starting the inference node on port $Port in this window (Ctrl+C to stop)"
+    & $Python -m aves_server.inference_node --models $Models --token $Token --port $Port --provider $Provider
+    exit $LASTEXITCODE
+}
+
+$Launcher = Join-Path $PSScriptRoot "aves-node-tray.pyw"
+$Pythonw = Join-Path $Venv "Scripts\pythonw.exe"
+$autostart = if ($NoAutostart) { "off" } else { "on" }
+Run "Setting up Start with Windows" { & $Python -m aves_server.tray --autostart $Launcher $autostart }
+if (-not $NoAutostart) { Step "The node will start automatically when you sign in to Windows" }
+
+Step "Starting the node in the system tray"
+Start-Process -FilePath $Pythonw -ArgumentList "`"$Launcher`"" -WorkingDirectory $Root
+Write-Host "Look for the Aves Caesar icon in the system tray (it may be under the ^ arrow). It turns green once the models are loaded." -ForegroundColor Green
+Write-Host "Right-click it to pause, resume or quit. Logs: $(Join-Path $Root 'node.log')"
