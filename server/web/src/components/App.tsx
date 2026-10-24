@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../api";
+import { BRAND } from "../brand";
 import { attempt, href, onToast, useLoader, useRoute, type Toast } from "../util";
 import { DuplicatesPage } from "./DuplicatesPage";
 import { JobsPage } from "./JobsPage";
@@ -15,8 +16,9 @@ export function App() {
   return (
     <div class="app">
       <header class="topbar">
-        <a class="brand" href={href("")}>
-          <img src="/favicon.png" alt="" /> Aves Caesar <span>Workflow</span>
+        <a class="brand" href={href("")} aria-label={`${BRAND.name} home`}>
+          <img src="/featherbase-mark.svg" alt="" width="28" height="28" />
+          <span class="wordmark">{BRAND.wordmark}</span>
         </a>
         <nav>
           <a href={href("")} class={!page || page === "sessions" ? "active" : ""}>Sessions</a>
@@ -32,7 +34,7 @@ export function App() {
         </button>
       </header>
       {status.data?.worker.model_error && (
-        <div class="banner error">The bird identification models could not be loaded: {status.data.worker.model_error}</div>
+        <div class="banner error" role="alert">The species suggestion models could not be loaded: {status.data.worker.model_error}</div>
       )}
       <main>
         {page === "sessions" && id ? (
@@ -47,6 +49,13 @@ export function App() {
           <SessionsPage status={status.data} />
         )}
       </main>
+      <footer class="footer">
+        <span>{BRAND.name} · {BRAND.tagline}</span>
+        <span>
+          <a href={BRAND.engineUrl} target="_blank" rel="noreferrer">{BRAND.engineCredit}</a>. AI-assisted suggestions that you review;
+          analysis runs on your own hardware.
+        </span>
+      </footer>
       <Toasts />
     </div>
   );

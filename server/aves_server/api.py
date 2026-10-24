@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session as OrmSession, selectinload
 
-from . import jobs as job_queue
+from . import brand, jobs as job_queue
 from .catalog import SpeciesCatalog
 from .config import ServerConfig
 from .db import Database
@@ -57,7 +57,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Aves Caesar Workflow", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title=brand.NAME, description=brand.TAGLINE, version="0.1.0", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -72,7 +72,7 @@ async def basic_auth(request: Request, call_next):
             except (ValueError, UnicodeDecodeError):
                 supplied = ""
         if not secrets.compare_digest(supplied.encode(), password.encode()):
-            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Aves Caesar"'})
+            return Response(status_code=401, headers={"WWW-Authenticate": f'Basic realm="{brand.NAME}"'})
     return await call_next(request)
 
 

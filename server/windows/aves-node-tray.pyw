@@ -1,4 +1,4 @@
-"""Starts the Aves Caesar GPU node in the system tray (run with pythonw.exe: no console window)."""
+"""Starts the Featherbase GPU node in the system tray (run with pythonw.exe: no console window)."""
 
 import sys
 from pathlib import Path

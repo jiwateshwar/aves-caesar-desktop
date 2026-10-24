@@ -48,7 +48,7 @@ jobs:
         run: pytest -q
 
   image:
-    # Publishes ghcr.io/<owner>/aves-caesar-workflow so Portainer can pull it instead of building on the NAS.
+    # Publishes ghcr.io/<owner>/featherbase so Portainer can pull it instead of building on the NAS.
     needs: test
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -65,7 +65,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Image name
         id: name
-        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/aves-caesar-workflow" >> "$GITHUB_OUTPUT"
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/featherbase" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .

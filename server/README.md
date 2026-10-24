@@ -1,6 +1,9 @@
-# Aves Caesar Workflow (server)
+# Featherbase
 
-A self-hosted photo workflow built on the Aves Caesar bird identification engine, designed to run on
+**Your birds. Beautifully organised.**
+
+Featherbase is a self-hosted, bird-first photo workflow. It identifies species with AI assistance using the
+open-source [Aves Caesar](https://www.aves-caesar.com) models, and you review every suggestion. It's designed to run on
 TrueNAS SCALE as a Portainer stack.
 
 ```
@@ -19,7 +22,8 @@ TrueNAS SCALE as a Portainer stack.
    without GPS the session asks you where they were taken: search a place name or paste coordinates. You
    can also choose *Identify without location*. Setting a location later re-identifies the shots you haven't
    touched, since the model is more accurate with one.
-4. **Identify.** The Aves Caesar detector and 10,859-species classifier run on the NVIDIA GPU.
+4. **Identify.** The Aves Caesar detector and 10,859-species classifier suggest a species for every bird, on
+   your own hardware (NAS, NVIDIA card or a Windows PC's GPU). Nothing is sent to a cloud service.
 5. **Review** per session and per folder, in tabs: *To review*, *Low confidence* (top guess below 60%,
    configurable), *No bird*, *Needs location*, *Name conflicts*, *Confirmed*, *Published*, *Left in dump*.
    For each bird you can confirm, pick one of the model's alternatives, search any species, or mark it
@@ -78,10 +82,10 @@ files stay owned by you.
 ### 3. Deploy the stack in Portainer
 
 **Prebuilt image (easiest).** Push this repository to your own GitHub fork. The *Workflow server* GitHub
-Action runs the tests against PostgreSQL and publishes `ghcr.io/<your-user>/aves-caesar-workflow:latest`.
+Action runs the tests against PostgreSQL and publishes `ghcr.io/<your-user>/featherbase:latest`.
 If the package is private, make it public or add a registry login in Portainer. Then paste
 `server/compose.yaml` into *Stacks → Add stack → Web editor*, delete its `build:` block, and set
-`AVES_IMAGE=ghcr.io/<your-user>/aves-caesar-workflow:latest`.
+`AVES_IMAGE=ghcr.io/<your-user>/featherbase:latest`.
 
 **From Git.** Go to *Stacks → Add stack → Repository*, enter your fork's URL, branch `truenas-workflow`, and
 compose path `server/compose.yaml`. Portainer builds the image on the NAS from the Dockerfile.
@@ -89,7 +93,7 @@ compose path `server/compose.yaml`. Portainer builds the image on the NAS from t
 **Or build on the NAS.** In the TrueNAS shell:
 ```sh
 git clone <your fork> aves && cd aves && git checkout truenas-workflow
-docker build -f server/Dockerfile -t aves-caesar-workflow:latest .
+docker build -f server/Dockerfile -t featherbase:latest .
 ```
 Then paste `server/compose.yaml` into *Stacks → Add stack → Web editor* and delete its `build:` block.
 
@@ -137,7 +141,7 @@ same model version (`model-version.json`); the NAS refuses a node with different
 IDs could differ.
 
 After setup the node runs as a **tray app** and starts by itself whenever you sign in to Windows. Right-click
-the Aves Caesar icon to:
+the Featherbase icon to:
 - **Pause** it. This unloads the models and frees the graphics card's memory, e.g. for gaming or editing.
   The NAS treats a paused PC like a switched-off one. **Resume** loads the models again in a few seconds.
 - Turn **Start with Windows** on or off.
@@ -147,7 +151,7 @@ the Aves Caesar icon to:
 The icon's dot shows the state: green means running, yellow means loading, grey means paused, red means
 error. Hovering shows how many photos it has identified.
 
-To update the node, unzip a newer `aves-inference-node.zip` over the same folder and run the setup command
+To update the node, unzip a newer `featherbase-node.zip` over the same folder and run the setup command
 again. The models and token are kept, and the running copy is replaced. Use `-Foreground` to run it in the
 console instead, and `-NoAutostart` to skip starting with Windows. Build the zip with
 `python server/windows/build_node_bundle.py`.
@@ -205,7 +209,15 @@ Tests: `cd server && pytest`. Add `AVES_TEST_DATABASE_URL=postgresql+psycopg://�
 Postgres. Add `AVES_TEST_PHOTOS=<folder with kingfisher.jpg and heron.jpg>` to also run the real-model
 end-to-end test.
 
+## Name
+
+"Featherbase" is a working name. An ornithological feather database already uses it
+(featherbase.info), so trademark, domain and confusion checks are needed before a public launch. The
+name lives in `aves_server/brand.py` and `web/src/brand.ts`, so it can change without touching the
+rest. Internal identifiers (the `aves_server` package, `AVES_*` variables, the `aves` database and the
+`aves-caesar` stack and volume) are deliberately left unchanged so existing installs keep their data.
+
 ## Licence
 
-AGPL-3.0-or-later, like Aves Caesar. If you let other people use your instance over a network, the licence
+AGPL-3.0-or-later, like Aves Caesar, whose models and engine Featherbase builds on. If you let other people use your instance over a network, the licence
 requires you to offer them the source code of your modified version.

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import { api, type Place, type SessionSummary } from "../api";
-import { attempt, useDebounced } from "../util";
+import { attempt, plural, useDebounced } from "../util";
 
 export function LocationPanel({ session, onChange }: { session: SessionSummary; onChange: () => void }) {
   const waiting = session.counts.awaiting_location;
@@ -9,7 +9,7 @@ export function LocationPanel({ session, onChange }: { session: SessionSummary; 
 
   const save = async (place: { latitude: number; longitude: number; label?: string }) => {
     const result = await attempt(() => api.updateSession(session.id, { location: place }),
-      (r) => (r.queued ? `Location set; ${r.queued} photos queued for identification` : "Location set"));
+      (r) => (r.queued ? `Location set; ${plural(r.queued, "photo")} queued for identification` : "Location set"));
     if (result) {
       setEditing(false);
       onChange();
@@ -30,7 +30,7 @@ export function LocationPanel({ session, onChange }: { session: SessionSummary; 
             </>
           ) : waiting > 0 ? (
             <>
-              <b>{waiting} photos have no GPS. Where were they taken?</b>
+              <b>{waiting === 1 ? "1 photo has" : `${waiting} photos have`} no GPS. Where were they taken?</b>
               <small>A location makes identification noticeably more accurate, and decides the country/state/city folder.</small>
             </>
           ) : (
@@ -48,7 +48,7 @@ export function LocationPanel({ session, onChange }: { session: SessionSummary; 
           {waiting > 0 && !session.analyse_without_location && (
             <button
               onClick={() =>
-                attempt(() => api.updateSession(session.id, { analyse_without_location: true }), (r) => `${r.queued} photos queued without a location`).then(onChange)
+                attempt(() => api.updateSession(session.id, { analyse_without_location: true }), (r) => `${plural(r.queued, "photo")} queued without a location`).then(onChange)
               }
               title="The model still works without a location, just less accurately"
             >

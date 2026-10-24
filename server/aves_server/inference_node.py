@@ -1,4 +1,4 @@
-"""GPU inference node: lends a PC's graphics card to the workflow server over the network.
+"""GPU inference node: lends a PC's graphics card to the Featherbase server over the network.
 
 Runs the same Aves Caesar models as the server. On Windows it uses DirectML, which works with any
 NVIDIA (or AMD/Intel) card through the normal graphics driver; no CUDA install is needed.
@@ -26,7 +26,7 @@ from PIL import Image
 
 from bird_desktop.inference.pipeline import PipelineInput
 
-from . import __version__
+from . import __version__, brand
 from .engine import LocalBackend, model_revision
 
 
@@ -114,7 +114,7 @@ class NodeBackend:
 
 
 def create_app(backend, token: str, models_dir: Path) -> FastAPI:
-    app = FastAPI(title="Aves Caesar inference node", version=__version__)
+    app = FastAPI(title=brand.NODE_NAME, version=__version__)
     lock = threading.Lock()  # one batch at a time keeps GPU memory predictable
 
     def authorise(authorization: str | None) -> None:
@@ -173,7 +173,7 @@ def make_server(backend, token: str, models_dir: Path, host: str, port: int):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Lend this machine's GPU to an Aves Caesar workflow server.")
+    parser = argparse.ArgumentParser(description=f"Lend this machine's GPU to a {brand.NAME} server.")
     parser.add_argument("--models", type=Path, default=Path(os.environ.get("AVES_MODELS_DIR", "models")))
     parser.add_argument("--token", default=os.environ.get("AVES_NODE_TOKEN"), help="Shared secret; the server's AVES_REMOTE_TOKEN")
     parser.add_argument("--host", default="0.0.0.0")

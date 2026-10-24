@@ -18,10 +18,12 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from . import brand
 from .inference_node import NodeBackend, make_server
 
 
-APP_NAME = "AvesCaesarNode"
+APP_NAME = "FeatherbaseNode"
+LEGACY_APP_NAMES = ("AvesCaesarNode",)  # earlier name; removed when autostart is set
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STATE_COLOURS = {"running": (46, 204, 113), "loading": (241, 196, 15), "paused": (149, 165, 166),
                  "error": (231, 76, 60), "stopped": (149, 165, 166)}
@@ -60,9 +62,9 @@ class Autostart:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
             if enabled:
                 winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, self.command)
-            else:
+            for name in LEGACY_APP_NAMES + (() if enabled else (APP_NAME,)):
                 try:
-                    winreg.DeleteValue(key, APP_NAME)
+                    winreg.DeleteValue(key, name)
                 except FileNotFoundError:
                     pass
 
@@ -88,7 +90,7 @@ def message_box(text: str) -> None:
     try:
         import ctypes
 
-        ctypes.windll.user32.MessageBoxW(None, text, "Aves Caesar GPU node", 0x40)
+        ctypes.windll.user32.MessageBoxW(None, text, brand.NODE_NAME, 0x40)
     except Exception:
         logger.warning(text)
 
@@ -120,7 +122,7 @@ class NodeTray:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self.quit),
         )
-        self.icon = pystray.Icon(APP_NAME, status_icon(self.base_image, "loading"), "Aves Caesar GPU node", menu)
+        self.icon = pystray.Icon(APP_NAME, status_icon(self.base_image, "loading"), brand.NODE_NAME, menu)
 
     def _settings(self) -> dict:
         try:
@@ -130,7 +132,7 @@ class NodeTray:
 
     def run(self) -> None:
         if port_in_use(self.port):
-            message_box(f"The Aves Caesar GPU node is already running (port {self.port} is in use).")
+            message_box(f"The {brand.NODE_NAME} is already running (port {self.port} is in use).")
             return
         threading.Thread(target=self.server.run, name="aves-node-server", daemon=True).start()
         self.backend.on_change = self.refresh
@@ -158,7 +160,7 @@ class NodeTray:
 
     def _refresh_now(self) -> None:
         self.icon.icon = status_icon(self.base_image, self.backend.state)
-        self.icon.title = f"Aves Caesar GPU node — {self._status_line()}"[:127]
+        self.icon.title = f"{brand.NODE_NAME} — {self._status_line()}"[:127]
         self.icon.update_menu()
 
     def toggle_pause(self) -> None:
@@ -195,7 +197,7 @@ def main(root: Path, launcher: Path) -> None:
         NodeTray(root, launcher).run()
     except Exception as exc:
         logger.exception("The tray app stopped")
-        message_box(f"The Aves Caesar GPU node stopped: {exc}\n\nSee node.log in {root}")
+        message_box(f"The {brand.NODE_NAME} stopped: {exc}\n\nSee node.log in {root}")
         raise
 
 

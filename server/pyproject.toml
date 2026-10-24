@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aves-server"
 dynamic = ["version"]
-description = "Aves Caesar workflow server: dumpsite ingest, bird identification, review and publishing"
+description = "Featherbase: a bird-first photo workflow (ingest, AI-assisted species identification, review, publishing) built on the Aves Caesar models"
 license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.11"
 dependencies = [

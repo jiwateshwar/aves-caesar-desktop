@@ -1,5 +1,6 @@
 import { api, type SessionSummary, type Status } from "../api";
-import { formatDate, href, useLoader } from "../util";
+import { BRAND } from "../brand";
+import { formatDate, href, plural, useLoader } from "../util";
 
 export function SessionsPage({ status }: { status: Status | null }) {
   const sessions = useLoader(() => api.sessions(), [], 15000);
@@ -9,10 +10,10 @@ export function SessionsPage({ status }: { status: Status | null }) {
   if (!sessions.data.length) {
     return (
       <div class="empty">
-        <h2>No photos yet</h2>
+        <div class="tagline">{BRAND.tagline}</div>
         <p>
-          Copy photos from your camera into <code>{status?.paths.dumpsite ?? "the dumpsite folder"}</code>. They'll appear here, grouped by the day
-          they were taken. New files are picked up automatically, or press <b>Scan now</b>.
+          Copy photos from your camera into <code>{status?.paths.dumpsite ?? "the dumpsite folder"}</code>. {BRAND.name} picks them up,
+          groups them by the day they were taken and suggests a species for every bird, ready for you to review. Or press <b>Scan now</b>.
         </p>
       </div>
     );
@@ -58,15 +59,15 @@ function SessionCard({ session }: { session: SessionSummary }) {
         {session.title && <span>{session.title}</span>}
       </div>
       <div class="session-place">
-        {session.location ? session.location.label : c.awaiting_location ? <span class="warn">📍 Location needed for {c.awaiting_location} photos</span> : <span class="muted">Located from GPS</span>}
+        {session.location ? session.location.label : c.awaiting_location ? <span class="warn">📍 Location needed for {plural(c.awaiting_location, "photo")}</span> : <span class="muted">Located from GPS</span>}
       </div>
       <div class="session-counts">
         {toReview > 0 && <span class="chip">{toReview} to review</span>}
         {c.low_confidence > 0 && <span class="chip amber">{c.low_confidence} low confidence</span>}
         {c.pending > 0 && <span class="chip">{c.pending} queued</span>}
-        {c.conflicts > 0 && <span class="chip red">{c.conflicts} conflicts</span>}
+        {c.conflicts > 0 && <span class="chip red">{plural(c.conflicts, "conflict")}</span>}
         {c.confirmed > 0 && <span class="chip green">{c.confirmed} ready</span>}
-        {c.error > 0 && <span class="chip red">{c.error} errors</span>}
+        {c.error > 0 && <span class="chip red">{plural(c.error, "error")}</span>}
         <span class="chip muted">{done}/{c.total} done</span>
       </div>
       <div class="progress"><i style={{ width: `${c.total ? (done / c.total) * 100 : 0}%` }} /></div>

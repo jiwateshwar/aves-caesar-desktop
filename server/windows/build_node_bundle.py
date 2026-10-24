@@ -1,4 +1,4 @@
-"""Builds dist/aves-inference-node.zip: everything a Windows PC needs to run the GPU inference node.
+"""Builds dist/featherbase-node.zip: everything a Windows PC needs to run the Featherbase GPU node.
 
     python server/windows/build_node_bundle.py
 """
@@ -10,13 +10,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-OUTPUT = ROOT / "dist" / "aves-inference-node.zip"
+OUTPUT = ROOT / "dist" / "featherbase-node.zip"
+# Kept from the first release so an update can be unzipped over an existing install (models, token).
 TOP = "aves-inference-node"
 
 INCLUDE = [
     ("server/windows/start-inference-node.ps1", "start-inference-node.ps1"),
     ("server/windows/aves-node-tray.pyw", "aves-node-tray.pyw"),
-    ("icon.png", "icon.png"),
+    ("server/windows/featherbase-icon.png", "icon.png"),
     ("backend/bird_desktop", "backend/bird_desktop"),
     ("server/aves_server/__init__.py", "server/aves_server/__init__.py"),
     ("server/aves_server/engine.py", "server/aves_server/engine.py"),
@@ -30,10 +31,11 @@ INCLUDE = [
     ("licenses", "licenses"),
 ]
 
-README = """Aves Caesar GPU inference node
-==============================
+README = """Featherbase GPU node
+====================
 
-Lends this PC's graphics card to the Aves Caesar workflow server on your NAS.
+Lends this PC's graphics card to your Featherbase server on the NAS, for AI-assisted
+species suggestions with the open-source Aves Caesar models. Photos stay on your network.
 
 1. Install the latest graphics driver and Python 3.11+ from https://www.python.org/downloads/windows/
    (tick "Add python.exe to PATH").

@@ -53,8 +53,8 @@ class Worker:
         self.analyzer = None
         self._model_error: str | None = None
         self._model_attempt_at = 0.0
-        self._last_poll = 0.0
-        self._last_reindex = 0.0
+        self._last_poll = float("-inf")  # so the first scan and index run at startup, whatever the uptime
+        self._last_reindex = float("-inf")
         self._stopping = False
         self._idle_activity: str | None = None
 

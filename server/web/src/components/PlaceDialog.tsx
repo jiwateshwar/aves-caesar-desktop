@@ -1,4 +1,5 @@
 import { useState } from "preact/hooks";
+import { plural } from "../util";
 
 export function PlaceDialog({ count, onSave, onCancel }: {
   count: number;
@@ -23,7 +24,7 @@ export function PlaceDialog({ count, onSave, onCancel }: {
           onSave(changes);
         }}
       >
-        <h3>Set the place of {count} shots</h3>
+        <h3>Set the place of {plural(count, "shot")}</h3>
         <p class="hint">Overrides the folder names used when publishing, e.g. when GPS resolved to a neighbourhood instead of the city.</p>
         {field("country", "Country")}
         {field("state", "State / region")}

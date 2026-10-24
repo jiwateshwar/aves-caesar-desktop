@@ -129,6 +129,15 @@ export function ShotViewer({ shotId, shotIds, onNavigate, onClose, onChanged }: 
   );
 }
 
+/** Who decided this species: the brief asks for visible AI suggestion and correction states. */
+function provenance(d: Detection): string {
+  if (d.status === "rejected") return "Rejected: not a bird";
+  if (d.source === "manual") return d.status === "confirmed" ? "Added and confirmed by you" : "Added by you";
+  const corrected = d.alternatives.length > 0 && d.species?.id !== d.alternatives[0].id;
+  if (d.status === "confirmed") return corrected ? "Corrected and confirmed by you" : "AI suggestion, confirmed by you";
+  return corrected ? "Corrected by you" : "AI suggestion";
+}
+
 const editable = (shot: ShotDetail) => ["review", "confirmed", "ignored"].includes(shot.status);
 const canConfirm = (shot: ShotDetail) =>
   shot.status === "review" && shot.detections.every((d) => d.status === "rejected" || d.species);
@@ -157,16 +166,20 @@ function DetectionCard({ detection: d, color, editable, onHover, onSpecies, onRe
 }) {
   const [changing, setChanging] = useState(false);
   const rejected = d.status === "rejected";
+  const low = d.confidence !== null && d.confidence < 0.6;
   return (
     <div class={`detection ${rejected ? "rejected" : ""}`} style={{ borderLeftColor: color }} onMouseEnter={() => onHover(d.id)} onMouseLeave={() => onHover(null)}>
+      <span class={`ai-label ${d.status === "confirmed" ? "confirmed" : ""}`}>{provenance(d)}</span>
       <div class="detection-main">
         <div>
           <b>{d.species?.name ?? "Unknown"}</b>
           <i>{d.species?.scientific_name}</i>
         </div>
-        <span class={`conf ${d.confidence !== null && d.confidence < 0.6 ? "low" : ""}`}>
-          {d.source === "manual" && d.confidence === null ? "by hand" : percent(d.confidence)}
-        </span>
+        {d.confidence !== null && (
+          <span class={`conf ${low ? "low" : ""}`} title="How confident the model is in this species">
+            {percent(d.confidence)}{low ? " · low" : ""}
+          </span>
+        )}
       </div>
       {!rejected && d.alternatives.length > 1 && (
         <div class="alternatives">

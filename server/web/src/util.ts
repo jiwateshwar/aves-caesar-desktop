@@ -66,7 +66,14 @@ export function useDebounced<T>(value: T, ms: number): T {
   return debounced;
 }
 
-export const percent = (value: number | null | undefined) => (value === null || value === undefined ? "–" : `${Math.round(value * 100)}%`);
+/** Model confidence as a percentage. Never shows 100%: a suggestion is never certain. */
+export function percent(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "–";
+  if (value >= 0.995) return `${Math.min(99.9, Math.floor(value * 1000) / 10).toFixed(1)}%`;
+  return `${Math.round(value * 100)}%`;
+}
+
+export const plural = (count: number, one: string, many: string = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
 export function formatDate(iso: string | null, withWeekday = true): string {
   if (!iso) return "Undated";

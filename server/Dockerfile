@@ -1,7 +1,7 @@
-# Aves Caesar workflow server. Build from the repository root:
-#   docker build -f server/Dockerfile -t aves-caesar-workflow .
+# Featherbase server (built on the Aves Caesar engine). Build from the repository root:
+#   docker build -f server/Dockerfile -t featherbase .
 # For a CPU-only image (no NVIDIA GPU):
-#   docker build -f server/Dockerfile --build-arg ONNXRUNTIME="onnxruntime>=1.20" -t aves-caesar-workflow:cpu .
+#   docker build -f server/Dockerfile --build-arg ONNXRUNTIME="onnxruntime>=1.20" -t featherbase:cpu .
 
 FROM node:22-bookworm-slim AS web
 WORKDIR /build/server/web

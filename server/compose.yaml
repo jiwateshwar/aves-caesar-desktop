@@ -1,4 +1,4 @@
-# Aves Caesar workflow — Portainer stack for TrueNAS SCALE.
+# Featherbase — Portainer stack for TrueNAS SCALE. Species suggestions by the Aves Caesar models.
 #
 # Set the variables below in Portainer's "Environment variables" section (see stack.env.example).
 # PHOTOS_DATASET must contain both the dumpsite and the published folder: mounting them as ONE volume
@@ -7,7 +7,7 @@
 name: aves-caesar
 
 x-app: &app
-  image: ${AVES_IMAGE:-aves-caesar-workflow:latest}
+  image: ${AVES_IMAGE:-featherbase:latest}
   build:
     context: ..
     dockerfile: server/Dockerfile
@@ -78,3 +78,5 @@ services:
 
 volumes:
   aves-db:
+    # Pinned, so renaming the stack or project can never orphan the database (it predates the Featherbase name).
+    name: aves-caesar_aves-db

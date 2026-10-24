@@ -1,7 +1,7 @@
 <#
-  Lends this Windows PC's graphics card to the Aves Caesar workflow server on your NAS.
+  Lends this Windows PC's graphics card to your Featherbase server on the NAS.
 
-  Unzip aves-inference-node.zip anywhere (or use a clone of the repository), then in PowerShell:
+  Unzip featherbase-node.zip anywhere (or use a clone of the repository), then in PowerShell:
       powershell -ExecutionPolicy Bypass -File <folder>\start-inference-node.ps1
 
   The first run sets everything up (Python packages, ~1.8 GB of models) and creates a token. It then
@@ -40,7 +40,7 @@ foreach ($candidate in @($PSScriptRoot, (Join-Path $PSScriptRoot "..\.."))) {
     }
 }
 if (-not $Root) {
-    throw "Can't find the Aves Caesar files next to this script. Unzip the whole aves-inference-node.zip and run the script from inside that folder."
+    throw "Can't find the Featherbase node files next to this script. Unzip the whole featherbase-node.zip and run the script from inside that folder."
 }
 
 $Venv = Join-Path $Root ".venv-node"
@@ -82,9 +82,10 @@ $Token = (Get-Content $TokenFile -Raw).Trim()
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    if (-not (Get-NetFirewallRule -DisplayName "Aves Caesar inference node" -ErrorAction SilentlyContinue)) {
+    # The rule was called "Aves Caesar inference node" before the rename; either one opens the port.
+    if (-not (Get-NetFirewallRule -DisplayName "Featherbase GPU node", "Aves Caesar inference node" -ErrorAction SilentlyContinue)) {
         Step "Allowing port $Port through Windows Firewall (private networks only)"
-        New-NetFirewallRule -DisplayName "Aves Caesar inference node" -Direction Inbound -Protocol TCP -LocalPort $Port -Profile Private -Action Allow | Out-Null
+        New-NetFirewallRule -DisplayName "Featherbase GPU node" -Direction Inbound -Protocol TCP -LocalPort $Port -Profile Private -Action Allow | Out-Null
     }
 } else {
     Write-Host "Tip: run once as Administrator to open port $Port in Windows Firewall automatically." -ForegroundColor Yellow
@@ -120,5 +121,5 @@ if (-not $NoAutostart) { Step "The node will start automatically when you sign i
 
 Step "Starting the node in the system tray"
 Start-Process -FilePath $Pythonw -ArgumentList "`"$Launcher`"" -WorkingDirectory $Root
-Write-Host "Look for the Aves Caesar icon in the system tray (it may be under the ^ arrow). It turns green once the models are loaded." -ForegroundColor Green
+Write-Host "Look for the Featherbase icon in the system tray (it may be under the ^ arrow). It turns green once the models are loaded." -ForegroundColor Green
 Write-Host "Right-click it to pause, resume or quit. Logs: $(Join-Path $Root 'node.log')"
