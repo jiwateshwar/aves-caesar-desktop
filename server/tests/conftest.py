@@ -17,7 +17,7 @@ from aves_server.db import Database
 from aves_server.media import MetadataReader
 from aves_server.models import Base
 from aves_server.scanner import DumpScanner
-from aves_server.views import VIEWS
+from aves_server.views import VIEW_NAMES
 
 
 class FakeClock:
@@ -46,10 +46,11 @@ def database(config: ServerConfig) -> Database:
     database = Database(config.database_url)
     if not config.database_url.startswith("sqlite"):
         with database.engine.begin() as connection:
-            for view in VIEWS:
+            for view in VIEW_NAMES:
                 connection.execute(text(f"DROP VIEW IF EXISTS {view}"))
+            connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
         Base.metadata.drop_all(database.engine)
-    database.create_schema()
+    database.migrate()
     yield database
     database.engine.dispose()
 

@@ -24,7 +24,7 @@ RUN apt-get update \
 RUN pip install --no-cache-dir \
         "numpy>=1.26" "Pillow>=10.0" "pillow-heif>=0.20" "gpxpy>=1.6" "$ONNXRUNTIME" \
         "fastapi>=0.115" "uvicorn[standard]>=0.30" "sqlalchemy>=2.0.30" "psycopg[binary]>=3.2" \
-        "reverse_geocode==1.6.6" "scipy>=1.13" "python-multipart>=0.0.9" "httpx>=0.27"
+        "reverse_geocode==1.6.6" "scipy>=1.13" "python-multipart>=0.0.9" "httpx>=0.27" "alembic>=1.13"
 
 WORKDIR /app
 # The engine resolves runtime_config.json relative to /app (three levels above bird_desktop/runtime).

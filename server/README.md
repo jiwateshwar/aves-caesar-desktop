@@ -163,23 +163,74 @@ when `model-version.json` changes.
 
 ## Using the database
 
-PostgreSQL is reachable on the host at `POSTGRES_PORT` (default `5433`), with database `aves`, user `aves`,
-and your `POSTGRES_PASSWORD`. Remove the `ports:` entry of the `db` service to keep it private.
+Other applications, such as a public catalogue in its own Portainer stack, read Featherbase's PostgreSQL
+**through views, with a read-only login**. The views are a versioned contract, managed by migrations
+(see [Schema changes](#schema-changes)): new columns are only ever added at the end, and existing ones
+keep their meaning.
 
-| View / table | What it holds |
-| --- | --- |
-| `v_published_photos` | One row per published file per confirmed species: filename, path in the library, species (common + scientific name, family), capture time, latitude/longitude, country/state/city, camera, lens, exposure, model confidence. |
-| `v_species_sightings` | Each species in the library with its number of shots and first/last sighting. |
-| `media_files` | Every file ever ingested, with its full EXIF as JSON (`exif`), SHA-256, size, and dump and published paths. |
-| `shots`, `detections`, `sessions`, `species` | The workflow itself: bounding boxes, the model's top-5 per bird, review state. |
-
-Example:
+**Connecting:** host `<truenas-ip>`, port `POSTGRES_PORT` (default `5433`), database `aves`. Use a login
+that belongs to `featherbase_reader`, never the `aves` owner. That role can read `v_published_photos`,
+`v_species_sightings` and `species`, and nothing else: no internal tables, no full EXIF, no writes. To
+create a login for another app:
 ```sql
-SELECT common_name, count(*) AS photos, min(captured_at) AS first
-FROM v_published_photos WHERE country = 'India' GROUP BY common_name ORDER BY photos DESC;
+CREATE ROLE my_app LOGIN PASSWORD '...' IN ROLE featherbase_reader;
+ALTER ROLE my_app SET default_transaction_read_only = on;
 ```
 
-The REST API used by the UI is documented interactively at `http://<truenas-ip>:8095/docs`.
+### `v_published_photos`
+
+One row per published file **per confirmed species**. A shot with three birds gives three rows, and a
+RAW+JPEG pair gives one row per file. Files without a species appear once, with empty species fields.
+
+| Group | Columns |
+| --- | --- |
+| File | `file_id`, `filename` (name in the library, including any conflict suffix), `original_filename`, `file_type` (`JPG`, `NEF`, `CR3`, …), `published_relpath` (relative to the published folder), `sha256`, `size_bytes`, `width`, `height`, `published_at`, `in_library` (false once the file is gone from the folder) |
+| Shot | `shot_id` (groups a RAW+JPEG pair), `captured_at` (camera local time), `shoot_date`, `session_title` |
+| Place | `latitude`, `longitude` (**exact**, from the photo's GPS or the session's location), `location_source` (`exif` or `session`), `country`, `state`, `city` |
+| Species | `detection_id`, `species_id`, `common_name` (English), `scientific_name`, `family`, `order_name`, `species_names` (JSON: language code → name), `model_confidence`, `identification_source` (`model` = AI suggestion you confirmed, `manual` = tagged by you), `box` (`[x0, y0, x1, y1]` in pixels of the analysed image) |
+| Camera | `camera_make`, `camera_model`, `lens_model`, `focal_length`, `f_number`, `exposure_time`, `iso` |
+| Sync | `changed_at`: the latest change to the file, its shot, its day or its identification. Poll `WHERE changed_at > :last_seen` and also check `in_library`. |
+
+### `v_species_sightings`
+
+One row per species in the library: `species_id`, `scientific_name`, `common_name`, `family`, `shots`,
+`first_seen`, `last_seen`.
+
+### `species`
+
+All 10,859 species the model knows: `species_id`, `scientific_name`, `common_name`, `family`,
+`order_name`, `names` (JSON, 70+ languages).
+
+```sql
+-- One card per shot for a species page
+SELECT shot_id, captured_at, session_title, city, state, country,
+       min(published_relpath) FILTER (WHERE file_type = 'JPG') AS jpeg, min(published_relpath) AS any_file
+FROM v_published_photos WHERE species_id = '264' AND in_library
+GROUP BY shot_id, captured_at, session_title, city, state, country ORDER BY captured_at DESC;
+```
+
+**Things your app has to handle itself:**
+- The original files still contain their exact GPS position and full EXIF, so strip them before serving.
+- Browsers can't display RAW files (`NEF`, `CR3`, …). Make web images from the shot's JPEG, or from the
+  RAW's embedded preview.
+- Mount the published folder **read-only** in your app's stack. Featherbase is the only writer.
+
+The REST API at `http://<truenas-ip>:8095/docs` is the Featherbase UI's private admin API. It isn't meant
+for public use.
+
+### Schema changes
+
+Migrations live in `aves_server/migrations/versions/` and run automatically when the containers start,
+under a lock so the web and worker containers never migrate at the same time. A database created before
+migrations existed is recognised and recorded as revision `0001`, without changing anything. To change
+the schema, edit `models.py`, then add a migration. For example, from `server/`:
+```sh
+PYTHONPATH=.:../backend python -c "from alembic import command; from alembic.config import Config; from sqlalchemy import create_engine; \
+  from aves_server.db import MIGRATIONS; e = create_engine('sqlite:///scratch.db'); c = Config(); c.set_main_option('script_location', str(MIGRATIONS)); \
+  conn = e.connect(); c.attributes['connection'] = conn; command.upgrade(c, 'head'); command.revision(c, 'describe the change', autogenerate=True)"
+```
+Review the generated file, especially for PostgreSQL, before committing it. `tests/test_migrations.py`
+checks that the migrations still match the models.
 
 ## Settings
 

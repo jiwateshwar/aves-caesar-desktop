@@ -52,7 +52,7 @@ async def lifespan(_app: FastAPI):
     state.config = ServerConfig.from_env()
     state.config.cache_dir.mkdir(parents=True, exist_ok=True)
     state.database = Database(state.config.database_url)
-    state.database.create_schema()
+    state.database.migrate()
     state.previews = PreviewStore(state.config.cache_dir)
     yield
 

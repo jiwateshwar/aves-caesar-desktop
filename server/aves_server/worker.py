@@ -41,7 +41,7 @@ class Worker:
         self.config = config
         config.cache_dir.mkdir(parents=True, exist_ok=True)
         self.database = Database(config.database_url)
-        self.database.create_schema()
+        self.database.migrate()
         executable = ExifTool.find()
         if executable is None:
             raise RuntimeError("ExifTool is not installed")
