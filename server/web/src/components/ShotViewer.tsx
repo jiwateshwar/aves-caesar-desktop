@@ -106,7 +106,7 @@ export function ShotViewer({ shotId, shotIds, onNavigate, onClose, onChanged }: 
 
             <section class="files">
               <h4>Files</h4>
-              {shot.files.map((file) => <FileRow key={file.id} file={file} />)}
+              {shot.files.map((file) => <FileRow key={file.id} file={file} dumpsite={shot.dumpsite_name} published={shot.published_name} />)}
               {shot.has_conflict && <SuffixForm shot={shot} onRenamed={(updated) => { setShot(updated); onChanged(); }} />}
             </section>
 
@@ -232,7 +232,8 @@ function Actions({ shot, act }: { shot: ShotDetail; act: (action: () => Promise<
   return null;
 }
 
-function FileRow({ file }: { file: FileInfo }) {
+function FileRow({ file, dumpsite, published }: { file: FileInfo; dumpsite: string; published: string }) {
+  const source = file.dump_relpath ? `${dumpsite}/${file.dump_relpath}` : null;
   return (
     <div class={`file-row ${file.conflict ? "conflict" : ""}`}>
       <div>
@@ -241,8 +242,15 @@ function FileRow({ file }: { file: FileInfo }) {
         <small class="muted"> · {formatBytes(file.size_bytes)}</small>
         <a class="link" href={downloadUrl(file.id)} title="Download the original file"> ⤓</a>
       </div>
+      {source && (
+        <small class="path" title={source}>
+          <span class="path-label">Picked up from</span> {source}
+        </small>
+      )}
       {file.publish_to && (
-        <small class="path">{file.status === "published" ? "Published at " : "→ "}{file.publish_to}</small>
+        <small class="path" title={`${published}/${file.publish_to}`}>
+          <span class="path-label">{file.status === "published" ? "Published at" : "Will publish to"}</span> {published}/{file.publish_to}
+        </small>
       )}
       {file.conflict === "library" && <small class="danger">A file with this name already exists in the library.</small>}
       {file.conflict === "dump" && <small class="warn">Another photo waiting in the dump has the same name.</small>}

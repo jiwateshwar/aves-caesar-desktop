@@ -212,7 +212,8 @@ main { padding: 20px; }
 .files { display: flex; flex-direction: column; gap: 6px; }
 .file-row { display: flex; flex-direction: column; padding: 6px 8px; background: var(--bg); border-radius: 6px; border: 1px solid transparent; }
 .file-row.conflict { border-color: var(--red); }
-.file-row .path { word-break: break-all; }
+.file-row .path { word-break: break-all; user-select: all; margin-top: 2px; }
+.file-row .path-label { display: block; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; color: var(--muted); user-select: none; }
 .file-row a.link { color: var(--blue); text-decoration: none; }
 .suffix-form { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px dashed var(--red); border-radius: var(--radius); }
 .exif { margin: 0; }

@@ -111,7 +111,9 @@ def _shot_response(db: OrmSession, shot: Shot) -> dict:
     db.flush()
     settings = SettingsStore.load(db)
     conflicts = ConflictChecker(db).conflicts([f.id for f in shot.files])
-    return shot_dict(shot, catalog(), settings, conflicts, detail=True)
+    # Folder names as the photographer sees them over SMB (the container paths mean nothing to them).
+    return {**shot_dict(shot, catalog(), settings, conflicts, detail=True),
+            "dumpsite_name": state.config.dump_dir.name, "published_name": state.config.published_dir.name}
 
 
 # ---------------------------------------------------------------- status

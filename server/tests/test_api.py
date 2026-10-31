@@ -78,6 +78,7 @@ def test_review_and_publish_through_the_api(client, scanner, clock, config, make
     shot = client.get(f"/api/shots/{low[0]['id']}").json()
     assert shot["detections"][0]["alternatives"][1]["name"] == "Grey Heron"
     assert shot["files"][0]["publish_to"] == "India/Tamil Nadu/Ooty/2026-10-18/JPG/unsure.JPG"
+    assert (shot["files"][0]["dump_relpath"], shot["dumpsite_name"], shot["published_name"]) == ("card/unsure.JPG", "dump", "published")
     assert client.get(f"/api/shots/{shot['id']}/thumb.jpg").headers["content-type"] == "image/jpeg"
 
     detection_id = shot["detections"][0]["id"]

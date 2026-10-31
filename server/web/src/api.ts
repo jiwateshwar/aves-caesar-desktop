@@ -91,6 +91,8 @@ export interface ShotDetail extends ShotSummary {
   analysed_with_location: boolean | null;
   analysis_provider: string | null;
   analysis_error: string | null;
+  dumpsite_name: string;
+  published_name: string;
 }
 
 export interface Job {
