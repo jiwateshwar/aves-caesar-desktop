@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -95,10 +96,52 @@ class MetadataReader:
     def read_many(self, paths: list[Path]) -> dict[Path, PhotoMetadata]:
         if not paths:
             return {}
-        output = self.session.execute(["-json", "-n", "-G", "--MakerNotes:all", *[str(path.resolve()) for path in paths]])
+        records = self._records(["-n", "--MakerNotes:all"], paths)
+        lenses = self.lens_names(paths)
+        result = {}
+        for path in paths:
+            meta = parse_metadata(records.get(_key(path), {}))
+            if lenses.get(path):
+                meta = replace(meta, lens_model=lenses[path])
+            result[path] = meta
+        return result
+
+    def lens_names(self, paths: list[Path]) -> dict[Path, str | None]:
+        """Lens names as ExifTool prints them.
+
+        The main read uses raw numbers (-n), and in that mode Composite:LensID is a code such as
+        "E0 3C 5C 8E 30 3C 4B 06". Only the printed form turns it into "Sigma 70-300mm F4-5.6 ...".
+        """
+        if not paths:
+            return {}
+        records = self._records(LENS_TAGS, paths)
+        return {path: lens_name(records.get(_key(path), {})) for path in paths}
+
+    def _records(self, arguments: list[str], paths: list[Path]) -> dict[str, dict]:
+        output = self.session.execute(["-json", "-G", *arguments, *[str(path.resolve()) for path in paths]])
         records = json.loads(output.decode("utf-8", errors="replace") or "[]")
-        by_path = {str(Path(record["SourceFile"]).resolve()).casefold(): record for record in records if "SourceFile" in record}
-        return {path: parse_metadata(by_path.get(str(path.resolve()).casefold(), {})) for path in paths}
+        return {str(Path(record["SourceFile"]).resolve()).casefold(): record for record in records if "SourceFile" in record}
+
+
+LENS_TAGS = ["-EXIF:LensModel", "-XMP:LensModel", "-Composite:LensID", "-XMP:Lens", "-EXIF:Lens"]
+_LENS_CODE = re.compile(r"^([0-9A-Fa-f]{2} )+[0-9A-Fa-f]{2}$|^\d+$")
+
+
+def is_lens_code(value: str | None) -> bool:
+    """True for raw lens identifiers ("E0 3C 5C 8E 30 3C 4B 06", "116") rather than names."""
+    return bool(value) and bool(_LENS_CODE.match(value.strip()))
+
+
+def lens_name(record: dict[str, Any]) -> str | None:
+    for tag in ("EXIF:LensModel", "XMP:LensModel", "Composite:LensID", "XMP:Lens", "EXIF:Lens"):
+        value = _text(record.get(tag))
+        if value and not is_lens_code(value) and not value.lower().startswith("unknown"):
+            return value
+    return None
+
+
+def _key(path: Path) -> str:
+    return str(path.resolve()).casefold()
 
 
 def parse_metadata(record: dict[str, Any]) -> PhotoMetadata:
@@ -112,7 +155,7 @@ def parse_metadata(record: dict[str, Any]) -> PhotoMetadata:
         longitude=longitude,
         camera_make=_text(lookup(tags, "Make")),
         camera_model=_text(lookup(tags, "Model")),
-        lens_model=_text(lookup(tags, "LensModel") or lookup(tags, "LensID") or lookup(tags, "Lens")),
+        lens_model=next((v for v in (_text(lookup(tags, name)) for name in ("LensModel", "LensID", "Lens")) if v and not is_lens_code(v)), None),
         focal_length=_number(lookup(tags, "FocalLength")),
         f_number=_number(lookup(tags, "FNumber")),
         exposure_time=_number(lookup(tags, "ExposureTime")),

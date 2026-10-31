@@ -298,6 +298,9 @@ function Exif({ file, shot }: { file: FileInfo | undefined; shot: ShotDetail }) 
       <p class="exif muted">
         Taken {shot.captured_at ? new Date(shot.captured_at).toLocaleString() : "at an unknown time"}
         {shot.captured_at_source === "file_mtime" ? " (from the file date — no EXIF date)" : ""}
+        {shot.captured_at_offset_days && shot.captured_at
+          ? ` (date corrected: the camera's clock said ${new Date(new Date(shot.captured_at).getTime() - shot.captured_at_offset_days * 86400000).toLocaleDateString()})`
+          : ""}
         {shot.location.latitude !== null ? ` · GPS ${shot.location.latitude?.toFixed(5)}, ${shot.location.longitude?.toFixed(5)}` : ""}
       </p>
     </section>

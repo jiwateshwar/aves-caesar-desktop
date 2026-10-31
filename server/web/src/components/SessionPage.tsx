@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, thumbUrl, type Category, type SessionSummary, type ShotSummary } from "../api";
-import { attempt, CATEGORY_LABELS, CATEGORY_ORDER, formatDate, formatTime, navigate, percent, PRIMARY_CATEGORIES, useLoader, type Route } from "../util";
+import { attempt, CATEGORY_LABELS, CATEGORY_ORDER, formatDate, formatTime, navigate, percent, plural, PRIMARY_CATEGORIES, useLoader, type Route } from "../util";
 import { LocationPanel } from "./LocationPanel";
 import { PlaceDialog } from "./PlaceDialog";
 import { ShotViewer } from "./ShotViewer";
@@ -59,6 +59,7 @@ export function SessionPage({ id, route, onChange }: { id: number; route: Route;
           <a class="back" href="#/">← All sessions</a>
           <h1>{formatDate(s.date)}</h1>
           <TitleEditor session={s} onSaved={session.reload} />
+          <DateEditor session={s} onMoved={(targetId) => { onChange(); navigate(`sessions/${targetId}`); session.reload(); }} />
         </div>
         <div class="header-actions">
           {counts.confirmed > 0 && (
@@ -262,6 +263,52 @@ function TitleEditor({ session, onSaved }: { session: SessionSummary; onSaved: (
       <input value={value} onInput={(e) => setValue(e.currentTarget.value)} placeholder="e.g. Nilgiris trip" autoFocus maxLength={200} />
       <button class="primary">Save</button>
       <button type="button" onClick={() => setEditing(false)}>Cancel</button>
+    </form>
+  );
+}
+
+function DateEditor({ session, onMoved }: { session: SessionSummary; onMoved: (sessionId: number) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(session.date ?? "");
+  if (!session.date) return null;
+  if (!editing) {
+    return (
+      <button class="link date-fix" onClick={() => setEditing(true)} title="Use this when the camera's clock was set wrong for these photos">
+        Camera date wrong?
+      </button>
+    );
+  }
+  const days = value ? Math.round((Date.parse(`${value}T12:00:00`) - Date.parse(`${session.date}T12:00:00`)) / 86400000) : 0;
+  const unpublished = session.counts.total - session.counts.published;
+  return (
+    <form
+      class="date-form"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!days) return;
+        const result = await attempt(() => api.shiftDate(session.id, value),
+          (r) => `Moved ${plural(r.moved, "photo")} to ${formatDate(value, false)}` + (r.requeued ? `; ${r.requeued} will be identified again` : ""));
+        if (result) {
+          setEditing(false);
+          onMoved(result.session_id);
+        }
+      }}
+    >
+      <label>
+        The photos were really taken on
+        <input type="date" value={value} onInput={(e) => setValue(e.currentTarget.value)} required />
+      </label>
+      <small class="muted">
+        {days === 0
+          ? "Pick the correct date."
+          : `Moves ${plural(unpublished, "photo")} ${Math.abs(days)} ${Math.abs(days) === 1 ? "day" : "days"} ${days > 0 ? "later" : "earlier"}, keeping their times.` +
+            (session.counts.published ? ` ${plural(session.counts.published, "published photo")} keep their date and folder.` : "") +
+            " Your files are not changed."}
+      </small>
+      <div class="inline-form">
+        <button class="primary" disabled={!days}>Correct the date</button>
+        <button type="button" onClick={() => setEditing(false)}>Cancel</button>
+      </div>
     </form>
   );
 }

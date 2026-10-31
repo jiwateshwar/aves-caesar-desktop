@@ -72,6 +72,7 @@ export interface ShotSummary {
   folder: string;
   captured_at: string | null;
   captured_at_source: string;
+  captured_at_offset_days: number;
   status: string;
   category: Category;
   bird_count: number;
@@ -178,6 +179,8 @@ export const api = {
   sessions: () => request<SessionSummary[]>("GET", "/api/sessions"),
   session: (id: number) => request<SessionSummary>("GET", `/api/sessions/${id}`),
   updateSession: (id: number, body: Record<string, unknown>) => request<SessionSummary & { queued: number }>("PATCH", `/api/sessions/${id}`, body),
+  shiftDate: (id: number, date: string) =>
+    request<{ session_id: number; days: number; moved: number; kept_published: number; requeued: number }>("POST", `/api/sessions/${id}/shift-date`, { date }),
   confirmConfident: (id: number, folder?: string) => request<{ confirmed: number }>("POST", `/api/sessions/${id}/confirm-confident${query({ folder })}`),
   shots: (params: { session_id?: number; folder?: string; category?: Category; offset?: number; limit?: number }) =>
     request<{ total: number; items: ShotSummary[] }>("GET", `/api/shots${query(params)}`),

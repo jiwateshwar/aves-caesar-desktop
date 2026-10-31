@@ -73,6 +73,7 @@ def shot_dict(shot: Shot, catalog: SpeciesCatalog, settings: WorkflowSettings, c
         "folder": shot.dump_folder,
         "captured_at": shot.captured_at.isoformat() if shot.captured_at else None,
         "captured_at_source": shot.captured_at_source,
+        "captured_at_offset_days": shot.captured_at_offset_days,
         "status": shot.status.value,
         "category": shot_category(shot, settings.confidence_threshold),
         "bird_count": shot.bird_count,

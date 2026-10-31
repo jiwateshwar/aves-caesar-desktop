@@ -19,8 +19,8 @@ from .catalog import SpeciesCatalog
 from .config import ServerConfig
 from .db import Database
 from .jobs import claim_next, recover_interrupted
-from .media import MetadataReader, RestartingExifTool
-from .models import Job, JobStatus, Shot, ShotStatus, WorkerState
+from .media import MetadataReader, RestartingExifTool, is_lens_code
+from .models import FileStatus, Job, JobStatus, MediaFile, Shot, ShotStatus, WorkerState
 from .previews import PreviewStore
 from .publisher import LibraryIndexer, Publisher
 from .scanner import DumpScanner
@@ -57,6 +57,8 @@ class Worker:
         self._last_reindex = float("-inf")
         self._stopping = False
         self._idle_activity: str | None = None
+        self._lens_names_fixed = False
+        self._lens_unreadable: set[int] = set()
 
     def stop(self, *_args) -> None:
         logger.info("Stopping after the current step")
@@ -105,7 +107,35 @@ class Worker:
 
         if self._build_previews():
             return True
+        if self._fix_lens_names():
+            return True
         return self._analyse()
+
+    def _fix_lens_names(self, batch: int = 100) -> bool:
+        """Replaces raw lens codes (e.g. "E0 3C 5C 8E 30 3C 4B 06") stored before lens names were read properly."""
+        if self._lens_names_fixed:
+            return False
+        with self.database.session() as db:
+            candidates = [row for row in db.execute(select(MediaFile.id, MediaFile.lens_model, MediaFile.status, MediaFile.dump_relpath,
+                                                           MediaFile.published_relpath).where(MediaFile.lens_model.is_not(None)))
+                          if is_lens_code(row.lens_model) and row.id not in self._lens_unreadable]
+        if not candidates:
+            self._lens_names_fixed = True
+            return False
+        self._heartbeat(f"Reading lens names ({len(candidates)} left)")
+        paths = {}
+        for row in candidates[:batch]:
+            path = (self.config.published_dir / row.published_relpath if row.status == FileStatus.published and row.published_relpath
+                    else self.config.dump_dir / row.dump_relpath if row.dump_relpath else None)
+            if path is not None and path.is_file():
+                paths[row.id] = path
+            else:
+                self._lens_unreadable.add(row.id)  # file gone: keep the stored value
+        names = MetadataReader(self.exiftool).lens_names(list(paths.values())) if paths else {}
+        with self.database.session() as db:
+            for file_id, path in paths.items():
+                db.get(MediaFile, file_id).lens_model = names.get(path)  # None when the file has no readable lens name
+        return True
 
     def _run_job(self, job: Job) -> None:
         self._heartbeat(f"Running {job.kind.replace('_', ' ')}")

@@ -9,6 +9,7 @@ import base64
 import secrets
 from collections import Counter
 from contextlib import asynccontextmanager
+from datetime import date as date_type
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session as OrmSession, selectinload
 
 from . import brand, jobs as job_queue
 from .catalog import SpeciesCatalog
+from .dating import shift_session_date
 from .config import ServerConfig
 from .db import Database
 from .geocoding import Geocoder
@@ -223,6 +225,19 @@ def update_session(session_id: int, body: SessionUpdate, db: OrmSession = Depend
         queued += set_analyse_without_location(session, body.analyse_without_location)
     db.flush()
     return {**get_session(session_id, db), "queued": queued}
+
+
+class DateShiftBody(BaseModel):
+    date: date_type
+
+
+@app.post("/api/sessions/{session_id}/shift-date")
+def shift_date(session_id: int, body: DateShiftBody, db: OrmSession = Depends(get_db)) -> dict:
+    """Corrects the date of a session's photos when the camera clock was wrong (files are not changed)."""
+    session = db.get(Session, session_id)
+    if session is None:
+        raise HTTPException(404, "Session not found")
+    return shift_session_date(db, session, body.date, SettingsStore.load(db)).__dict__
 
 
 @app.post("/api/sessions/{session_id}/confirm-confident")

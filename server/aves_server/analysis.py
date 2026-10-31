@@ -13,6 +13,7 @@ from bird_desktop.media.image_io import ImageLoader
 from .config import ServerConfig
 from .db import Database
 from .engine import RemoteUnavailable, backend_from_env, load_runtime_config
+from .dating import model_datetime
 from .locations import analysis_coordinates
 from .models import Detection, DetectionSource, DetectionStatus, Shot, ShotStatus
 from .previews import PreviewStore
@@ -78,7 +79,7 @@ class Analyzer:
                 shot.analysis_attempts += 1
                 latitude, longitude = analysis_coordinates(shot, shot.session)
                 loaded.append((shot.id, image, latitude is not None))
-                inputs.append(PipelineInput(image.image, latitude, longitude, shot.exif_datetime))
+                inputs.append(PipelineInput(image.image, latitude, longitude, model_datetime(shot)))
 
         try:
             try:

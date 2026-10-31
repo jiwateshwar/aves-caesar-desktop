@@ -4,7 +4,7 @@ import enum
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -95,6 +95,8 @@ class Shot(Base):
     group_key: Mapped[str] = mapped_column(String(1200), unique=True)   # folder + stem + capture time
     captured_at: Mapped[datetime | None] = mapped_column(DateTime)       # camera local time, naive
     captured_at_source: Mapped[str] = mapped_column(String(16), default="exif")  # exif | file_mtime
+    # Days added to the camera's date when its clock was wrong (captured_at is already corrected).
+    captured_at_offset_days: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     exif_datetime: Mapped[str | None] = mapped_column(String(40))        # raw EXIF string fed to the model
     gps_lat: Mapped[float | None] = mapped_column(Float)
     gps_lon: Mapped[float | None] = mapped_column(Float)
@@ -157,6 +159,7 @@ class MediaFile(Base):
     exif: Mapped[dict[str, Any]] = mapped_column(JsonType, default=dict)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, server_default=func.now())
 
     shot: Mapped[Shot | None] = relationship(back_populates="files")
 
