@@ -4,9 +4,12 @@
 # PHOTOS_DATASET must contain both the dumpsite and the published folder: mounting them as ONE volume
 # lets the app move files instantly (a rename) instead of copying gigabytes between mounts.
 
-name: aves-caesar
+# Portainer names the project after the stack; this default is for the command line.
+name: ${STACK_NAME:-aves-caesar}
 
 x-app: &app
+  # A second deployment (e.g. a lab branch) must set its own AVES_IMAGE, or the two stacks would
+  # overwrite each other's image and could start each other's code.
   image: ${AVES_IMAGE:-featherbase:latest}
   build:
     context: ..
@@ -79,4 +82,5 @@ services:
 volumes:
   aves-db:
     # Pinned, so renaming the stack or project can never orphan the database (it predates the Featherbase name).
-    name: aves-caesar_aves-db
+    # A second deployment MUST set its own DB_VOLUME, or it would attach to this stack's database.
+    name: ${DB_VOLUME:-aves-caesar_aves-db}
