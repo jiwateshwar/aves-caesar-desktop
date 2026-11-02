@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
-import { api, type Settings } from "../api";
-import { attempt, useLoader } from "../util";
+import { api, type LifeList, type Settings } from "../api";
+import { attempt, formatDate, plural, useLoader } from "../util";
 
 export function SettingsPage() {
   const loaded = useLoader(() => api.settings(), []);
@@ -15,6 +15,7 @@ export function SettingsPage() {
   const defaults = loaded.data.defaults;
 
   return (
+    <>
     <form
       class="page narrow settings"
       onSubmit={async (e) => {
@@ -86,5 +87,69 @@ export function SettingsPage() {
         <button class="primary">Save settings</button>
       </div>
     </form>
+    <LifeListPanel />
+    </>
+  );
+}
+
+function LifeListPanel() {
+  const lifeList = useLoader(() => api.lifeList(), []);
+  const [busy, setBusy] = useState(false);
+  const data: LifeList | null = lifeList.data;
+
+  const upload = async (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true);
+    const result = await attempt(() => api.uploadLifeList(file),
+      (r) => `Life list loaded: ${plural(r.species ?? 0, "species", "species")}` + (r.unmatched?.length ? `, ${r.unmatched.length} not recognised` : ""));
+    setBusy(false);
+    if (result) lifeList.setData(result);
+  };
+
+  return (
+    <section class="page narrow settings">
+      <fieldset>
+        <legend>eBird life list</legend>
+        <p class="hint">
+          Species that aren't on your life list are marked <span class="new-badge">(New)</span> when you review photos. Download your life list
+          from eBird as a CSV file and upload it here; each upload replaces the previous one.
+        </p>
+        {data?.loaded ? (
+          <div class="life-list-summary">
+            <b>{plural(data.species ?? 0, "species", "species")}</b> from <code>{data.filename}</code>
+            <small class="muted"> · uploaded {data.imported_at ? formatDate(data.imported_at.slice(0, 10), false) : ""}</small>
+            {data.unmatched && data.unmatched.length > 0 && (
+              <details>
+                <summary class="warn">{plural(data.unmatched.length, "species", "species")} not recognised by the identification model</summary>
+                <p class="hint">
+                  Usually recent taxonomy splits. Photos of these birds are named after the model's species, so they may still show as (New).
+                </p>
+                <ul>
+                  {data.unmatched.map((u) => (
+                    <li key={u.scientific_name}>{u.common_name} <i class="muted">{u.scientific_name}</i></li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        ) : (
+          <p class="muted">No life list uploaded yet, so nothing is marked as new.</p>
+        )}
+        <div class="actions">
+          <label class="button-like">
+            {busy ? "Uploading…" : data?.loaded ? "Upload a newer life list" : "Upload life list (CSV)"}
+            <input type="file" accept=".csv,text/csv" hidden disabled={busy}
+                   onChange={(e) => { upload(e.currentTarget.files?.[0]); e.currentTarget.value = ""; }} />
+          </label>
+          {data?.loaded && (
+            <button type="button" class="danger" onClick={async () => {
+              if (!window.confirm("Remove the life list? Nothing will be marked as new until you upload one again.")) return;
+              const result = await attempt(() => api.clearLifeList(), "Life list removed");
+              if (result) lifeList.setData(result);
+            }}>Remove</button>
+          )}
+        </div>
+      </fieldset>
+    </section>
   );
 }

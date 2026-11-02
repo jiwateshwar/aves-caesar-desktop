@@ -9,6 +9,17 @@ export interface Species {
   name: string;
   scientific_name: string;
   family: string | null;
+  /** Present once an eBird life list is uploaded: true when this species isn't on it. */
+  new?: boolean;
+}
+
+export interface LifeList {
+  loaded: boolean;
+  filename?: string;
+  imported_at?: string;
+  species?: number;
+  matched?: number;
+  unmatched?: { common_name: string; scientific_name: string }[];
 }
 
 export interface Place {
@@ -208,6 +219,16 @@ export const api = {
   searchSpecies: (q: string) => request<Species[]>("GET", `/api/species${query({ q })}`),
   searchPlaces: (q: string) => request<Place[]>("GET", `/api/locations/search${query({ q })}`),
   reversePlace: (lat: number, lon: number) => request<Place>("GET", `/api/locations/reverse${query({ lat, lon })}`),
+  lifeList: () => request<LifeList>("GET", "/api/life-list"),
+  clearLifeList: () => request<LifeList>("DELETE", "/api/life-list"),
+  uploadLifeList: async (file: File): Promise<LifeList> => {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch("/api/life-list", { method: "POST", body: form });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new ApiError(response.status, typeof data.detail === "string" ? data.detail : response.statusText);
+    return data as LifeList;
+  },
   settings: () => request<{ values: Settings; defaults: Settings; languages: string[] }>("GET", "/api/settings"),
   updateSettings: (changes: Partial<Settings>) => request<{ values: Settings; defaults: Settings; languages: string[] }>("PUT", "/api/settings", changes),
 };

@@ -13,21 +13,22 @@ from datetime import date as date_type
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session as OrmSession, selectinload
 
 from . import brand, jobs as job_queue
 from .catalog import SpeciesCatalog
 from .dating import shift_session_date
+from .lifelist import LifeListError, import_life_list, life_species_ids, parse_ebird_csv
 from .config import ServerConfig
 from .db import Database
 from .geocoding import Geocoder
 from .locations import UNPUBLISHED, clear_session_location, set_analyse_without_location, set_session_location
-from .models import FileStatus, Job, JobStatus, MediaFile, Session, Shot, ShotStatus, WorkerState
+from .models import FileStatus, Job, JobStatus, LifeListEntry, LifeListImport, MediaFile, Session, Shot, ShotStatus, WorkerState
 from .previews import PreviewStore
 from .publisher import ConflictChecker
 from .review import (ReviewError, add_species, append_suffix, confirm_confident, confirm_shot, ignore_shot, reject_detection,
@@ -114,7 +115,7 @@ def _shot_response(db: OrmSession, shot: Shot) -> dict:
     settings = SettingsStore.load(db)
     conflicts = ConflictChecker(db).conflicts([f.id for f in shot.files])
     # Folder names as the photographer sees them over SMB (the container paths mean nothing to them).
-    return {**shot_dict(shot, catalog(), settings, conflicts, detail=True),
+    return {**shot_dict(shot, catalog(), settings, conflicts, detail=True, life_list=life_species_ids(db)),
             "dumpsite_name": state.config.dump_dir.name, "published_name": state.config.published_dir.name}
 
 
@@ -277,7 +278,8 @@ def list_shots(session_id: int | None = None, folder: str | None = None, categor
     total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
     shots = db.scalars(query.order_by(Shot.captured_at, Shot.id).offset(offset).limit(limit)).all()
     conflicts = ConflictChecker(db).conflicts([f.id for shot in shots for f in shot.files])
-    return {"total": total, "items": [shot_dict(shot, catalog(), settings, conflicts) for shot in shots]}
+    life_list = life_species_ids(db)
+    return {"total": total, "items": [shot_dict(shot, catalog(), settings, conflicts, life_list=life_list) for shot in shots]}
 
 
 @app.get("/api/shots/{shot_id}")
@@ -489,6 +491,37 @@ def delete_duplicate(file_id: int, db: OrmSession = Depends(get_db)) -> dict:
         path.unlink()
     file.status = FileStatus.missing
     return {"deleted": file.dump_relpath}
+
+
+# ---------------------------------------------------------------- eBird life list
+
+@app.get("/api/life-list")
+def get_life_list(db: OrmSession = Depends(get_db)) -> dict:
+    current = db.scalar(select(LifeListImport).order_by(LifeListImport.id.desc()).limit(1))
+    if current is None:
+        return {"loaded": False}
+    unmatched = db.scalars(select(LifeListEntry).where(LifeListEntry.import_id == current.id, LifeListEntry.species_id.is_(None))
+                           .order_by(LifeListEntry.common_name)).all()
+    return {"loaded": True, "filename": current.filename, "imported_at": iso(current.imported_at), "species": current.species_count,
+            "matched": current.matched_count, "unmatched": [{"common_name": e.common_name, "scientific_name": e.scientific_name} for e in unmatched]}
+
+
+@app.post("/api/life-list")
+def upload_life_list(file: UploadFile = File(...), db: OrmSession = Depends(get_db)) -> dict:
+    """Replaces the stored life list with an eBird life list export (CSV)."""
+    try:
+        rows = parse_ebird_csv(file.file.read())
+    except LifeListError as exc:
+        raise HTTPException(400, str(exc))
+    import_life_list(db, file.filename or "life list.csv", rows, catalog())
+    return get_life_list(db)
+
+
+@app.delete("/api/life-list")
+def clear_life_list(db: OrmSession = Depends(get_db)) -> dict:
+    db.execute(delete(LifeListEntry))
+    db.execute(delete(LifeListImport))
+    return {"loaded": False}
 
 
 # ---------------------------------------------------------------- lookups and settings

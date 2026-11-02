@@ -245,3 +245,33 @@ class WorkerState(Base):
     model_error: Mapped[str | None] = mapped_column(Text)
     last_scan: Mapped[dict[str, Any]] = mapped_column(JsonType, default=dict)
     last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LifeListImport(Base):
+    """The photographer's eBird life list. Only the latest upload is kept; a new upload replaces it."""
+
+    __tablename__ = "life_list_imports"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    filename: Mapped[str] = mapped_column(String(300))
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    species_count: Mapped[int] = mapped_column(Integer, default=0)   # countable species in the file
+    matched_count: Mapped[int] = mapped_column(Integer, default=0)   # of those, found among the model's species
+
+    entries: Mapped[list[LifeListEntry]] = relationship(back_populates="life_list", cascade="all, delete-orphan")
+
+
+class LifeListEntry(Base):
+    __tablename__ = "life_list_entries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    import_id: Mapped[int] = mapped_column(ForeignKey("life_list_imports.id", ondelete="CASCADE"), index=True)
+    species_id: Mapped[str | None] = mapped_column(ForeignKey("species.species_id"), index=True)  # None: not in the model
+    common_name: Mapped[str] = mapped_column(String(200))
+    scientific_name: Mapped[str] = mapped_column(String(200))
+    first_seen: Mapped[date | None] = mapped_column(Date)
+    location: Mapped[str | None] = mapped_column(String(300))
+    region: Mapped[str | None] = mapped_column(String(40))
+    matched_by: Mapped[str | None] = mapped_column(String(16))   # scientific | common | None
+
+    life_list: Mapped[LifeListImport] = relationship(back_populates="entries")

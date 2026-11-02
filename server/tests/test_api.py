@@ -76,6 +76,14 @@ def test_review_and_publish_through_the_api(client, scanner, clock, config, make
     low = client.get("/api/shots", params={"session_id": session_id, "category": "low_confidence"}).json()["items"]
     assert [s["species"][0]["name"] for s in low] == ["Common Kingfisher"]
     shot = client.get(f"/api/shots/{low[0]['id']}").json()
+    assert "new" not in shot["detections"][0]["species"]  # no life list yet
+    life = "Common Name,Scientific Name,Countable\nCommon Kingfisher,Alcedo atthis,1\n"
+    loaded = client.post("/api/life-list", files={"file": ("ebird_world_life_list.csv", life.encode(), "text/csv")}).json()
+    assert (loaded["loaded"], loaded["species"], loaded["matched"]) == (True, 1, 1)
+    shot = client.get(f"/api/shots/{shot['id']}").json()
+    assert shot["detections"][0]["species"]["new"] is False                          # the kingfisher is on the list
+    assert [a["new"] for a in shot["detections"][0]["alternatives"]] == [False, True]  # the heron is not
+    assert client.post("/api/life-list", files={"file": ("x.csv", b"a,b\n1,2\n", "text/csv")}).status_code == 400
     assert shot["detections"][0]["alternatives"][1]["name"] == "Grey Heron"
     assert shot["files"][0]["publish_to"] == "India/Tamil Nadu/Ooty/2026-10-18/JPG/unsure.JPG"
     assert (shot["files"][0]["dump_relpath"], shot["dumpsite_name"], shot["published_name"]) == ("card/unsure.JPG", "dump", "published")

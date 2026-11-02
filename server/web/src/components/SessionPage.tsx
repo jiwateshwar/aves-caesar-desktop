@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, thumbUrl, type Category, type SessionSummary, type ShotSummary } from "../api";
 import { attempt, CATEGORY_LABELS, CATEGORY_ORDER, formatDate, formatTime, navigate, percent, plural, PRIMARY_CATEGORIES, useLoader, type Route } from "../util";
 import { LocationPanel } from "./LocationPanel";
+import { NewBadge } from "./NewBadge";
 import { PlaceDialog } from "./PlaceDialog";
 import { ShotViewer } from "./ShotViewer";
 
@@ -222,7 +223,7 @@ function ShotCard({ shot, threshold, selected, onSelect, onOpen }: {
       <div class="card-body" onClick={onOpen}>
         <div class="species">
           {shot.species.length ? (
-            shot.species.map((sp, i) => <span key={i}>{sp.name}</span>)
+            shot.species.map((sp, i) => <span key={i}>{sp.name} <NewBadge species={sp} /></span>)
           ) : shot.category === "awaiting_location" || shot.category === "pending" ? (
             <span class="muted">Not identified yet</span>
           ) : (

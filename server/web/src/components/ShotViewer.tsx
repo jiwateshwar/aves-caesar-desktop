@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { api, downloadUrl, previewUrl, type Detection, type FileInfo, type ShotDetail } from "../api";
 import { attempt, formatBytes, formatExposure, formatTime, percent } from "../util";
+import { NewBadge } from "./NewBadge";
 import { SpeciesPicker } from "./SpeciesPicker";
 
 const BOX_COLORS = ["#4ade80", "#60a5fa", "#f472b6", "#facc15", "#a78bfa", "#fb923c"];
@@ -172,7 +173,7 @@ function DetectionCard({ detection: d, color, editable, onHover, onSpecies, onRe
       <span class={`ai-label ${d.status === "confirmed" ? "confirmed" : ""}`}>{provenance(d)}</span>
       <div class="detection-main">
         <div>
-          <b>{d.species?.name ?? "Unknown"}</b>
+          <b>{d.species?.name ?? "Unknown"} <NewBadge species={d.species} /></b>
           <i>{d.species?.scientific_name}</i>
         </div>
         {d.confidence !== null && (
@@ -186,7 +187,7 @@ function DetectionCard({ detection: d, color, editable, onHover, onSpecies, onRe
           {d.alternatives.map((alt) => (
             <button key={alt.id} disabled={!editable} class={alt.id === d.species?.id ? "chip active" : "chip"} onClick={() => onSpecies(alt.id)}
                     title={alt.scientific_name}>
-              {alt.name} <small>{percent(alt.confidence)}</small>
+              {alt.name} <NewBadge species={alt} /> <small>{percent(alt.confidence)}</small>
             </button>
           ))}
         </div>

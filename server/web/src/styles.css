@@ -257,3 +257,8 @@ table.list th { color: var(--muted); font-weight: 500; }
 .date-form { display: flex; flex-direction: column; gap: 6px; max-width: 520px; margin-top: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .date-form label { display: flex; flex-direction: column; gap: 4px; }
 .date-form input { max-width: 220px; }
+
+.new-badge { color: var(--amber); font-weight: 700; font-size: 0.85em; white-space: nowrap; }
+.button-like { display: inline-flex; align-items: center; cursor: pointer; font-weight: 600; color: var(--accent-text); background: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius); padding: 6px 12px; }
+.life-list-summary { display: flex; flex-direction: column; gap: 4px; }
+.life-list-summary ul { margin: 4px 0 0; padding-left: 18px; }

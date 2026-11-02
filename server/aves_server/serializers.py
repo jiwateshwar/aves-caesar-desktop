@@ -20,23 +20,28 @@ def shot_category(shot: Shot, threshold: float) -> str:
     return "review"
 
 
-def species_dict(catalog: SpeciesCatalog, species_id: str | None, language: str) -> dict | None:
+def species_dict(catalog: SpeciesCatalog, species_id: str | None, language: str, life_list: set[str] | None = None) -> dict | None:
+    """life_list: species on the photographer's eBird life list; when given, "new" says whether this one is missing from it."""
     entry = catalog.get(species_id)
     if entry is None:
-        return None if species_id is None else {"id": species_id, "name": species_id, "scientific_name": "", "family": None}
-    return {"id": entry.species_id, "name": entry.name(language), "scientific_name": entry.scientific_name, "family": entry.family}
+        data = None if species_id is None else {"id": species_id, "name": species_id, "scientific_name": "", "family": None}
+    else:
+        data = {"id": entry.species_id, "name": entry.name(language), "scientific_name": entry.scientific_name, "family": entry.family}
+    if data is not None and life_list is not None:
+        data["new"] = species_id not in life_list
+    return data
 
 
-def detection_dict(detection: Detection, catalog: SpeciesCatalog, language: str) -> dict:
+def detection_dict(detection: Detection, catalog: SpeciesCatalog, language: str, life_list: set[str] | None = None) -> dict:
     return {
         "id": detection.id,
         "box": detection.box,
         "box_confidence": detection.box_confidence,
-        "species": species_dict(catalog, detection.species_id, language),
+        "species": species_dict(catalog, detection.species_id, language, life_list),
         "confidence": detection.confidence,
         "source": detection.source.value,
         "status": detection.status.value,
-        "alternatives": [{**(species_dict(catalog, p["species_id"], language) or {}), "confidence": p["confidence"]} for p in detection.predictions],
+        "alternatives": [{**(species_dict(catalog, p["species_id"], language, life_list) or {}), "confidence": p["confidence"]} for p in detection.predictions],
     }
 
 
@@ -63,7 +68,8 @@ def file_dict(file: MediaFile, conflicts: dict[int, str], detail: bool = False) 
     return data
 
 
-def shot_dict(shot: Shot, catalog: SpeciesCatalog, settings: WorkflowSettings, conflicts: dict[int, str], detail: bool = False) -> dict:
+def shot_dict(shot: Shot, catalog: SpeciesCatalog, settings: WorkflowSettings, conflicts: dict[int, str], detail: bool = False,
+              life_list: set[str] | None = None) -> dict:
     language = settings.species_language
     active = [d for d in shot.detections if d.status != DetectionStatus.rejected]
     files = [f for f in shot.files if f.status.value != "duplicate"]
@@ -78,7 +84,7 @@ def shot_dict(shot: Shot, catalog: SpeciesCatalog, settings: WorkflowSettings, c
         "category": shot_category(shot, settings.confidence_threshold),
         "bird_count": shot.bird_count,
         "min_confidence": shot.min_confidence,
-        "species": [species_dict(catalog, d.species_id, language) for d in active if d.species_id],
+        "species": [species_dict(catalog, d.species_id, language, life_list) for d in active if d.species_id],
         "location": {"latitude": shot.gps_lat, "longitude": shot.gps_lon, "source": shot.location_source,
                      "country": shot.country, "state": shot.state, "city": shot.city},
         "preview_ready": shot.preview_ready,
@@ -87,7 +93,7 @@ def shot_dict(shot: Shot, catalog: SpeciesCatalog, settings: WorkflowSettings, c
     }
     if detail:
         data.update({
-            "detections": [detection_dict(d, catalog, language) for d in shot.detections],
+            "detections": [detection_dict(d, catalog, language, life_list) for d in shot.detections],
             "files": [file_dict(f, conflicts, detail=True) | {"publish_to": _publish_to(shot, f, settings)} for f in files],
             "image_width": shot.image_width, "image_height": shot.image_height,
             "analysed_at": iso(shot.analysed_at), "analysed_with_location": shot.analysed_with_location,
