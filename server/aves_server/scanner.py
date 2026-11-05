@@ -88,9 +88,12 @@ class DumpScanner:
             found.update({(site.id, rel): candidate for rel, candidate in self._walk(site.root).items()})
         report.found = len(found)
         with self.database.session() as db:
+            # Photos published from a read-only dumpsite were copied, so their originals are still there: known, not new.
+            read_only = [site.id for site in sites.values() if site.read_only]
             known = {(row.dumpsite_id, row.dump_relpath): row for row in db.execute(
                 select(MediaFile.id, MediaFile.dumpsite_id, MediaFile.dump_relpath, MediaFile.status, MediaFile.size_bytes)
-                .where(MediaFile.status.in_([FileStatus.in_dump, FileStatus.duplicate, FileStatus.missing]))
+                .where(MediaFile.status.in_([FileStatus.in_dump, FileStatus.duplicate, FileStatus.missing])
+                       | ((MediaFile.status == FileStatus.published) & MediaFile.dumpsite_id.in_(read_only)))
             )}
             self._reconcile_known(db, known, found, scanned, sites, report)
 

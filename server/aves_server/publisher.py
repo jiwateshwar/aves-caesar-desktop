@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session as OrmSession
 
 from .config import ServerConfig
 from .db import Database
-from .dumpsites import file_path, roots
+from .dumpsites import MAIN_ID, file_path, roots
 from .media import is_ignored_dir, sha256_of
 from .models import FileStatus, LibraryFile, MediaFile, Shot, ShotStatus
 from .settings import SettingsStore, WorkflowSettings
@@ -91,12 +91,18 @@ def _component(value: str | None, placeholder: str) -> str:
     return text or placeholder
 
 
-def move_file(source: Path, target: Path, expected_sha256: str) -> None:
-    """Moves without ever overwriting. Same filesystem: hard link + unlink. Otherwise: copy, verify, then unlink."""
+def move_file(source: Path, target: Path, expected_sha256: str, keep_source: bool = False) -> None:
+    """Moves without ever overwriting. Same filesystem: hard link + unlink. Otherwise: copy, verify, then unlink.
+
+    keep_source=True copies instead (a real copy, never a hard link, so the library never shares a file with the
+    dumpsite) and leaves the source untouched.
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         raise FileExistsError(target)
     try:
+        if keep_source:
+            raise OSError(errno.EXDEV, "copy requested")
         os.link(source, target)  # fails instead of replacing an existing file
     except OSError as exc:
         if exc.errno not in (errno.EXDEV, errno.EPERM, errno.ENOTSUP, errno.EMLINK, errno.EOPNOTSUPP):
@@ -113,7 +119,8 @@ def move_file(source: Path, target: Path, expected_sha256: str) -> None:
             os.replace(partial, target)
         finally:
             partial.unlink(missing_ok=True)
-    source.unlink()
+    if not keep_source:
+        source.unlink()
 
 
 def _sidecars(source: Path) -> list[tuple[Path, str]]:
@@ -183,8 +190,9 @@ class Publisher:
             for file, relpath in plan:
                 source = file_path(sites, file.dumpsite_id, file.dump_relpath)
                 target = self.config.published_dir / relpath.as_posix()
-                move_file(source, target, file.sha256)
-                self._move_sidecars(source, target, file, report)
+                keep = sites[file.dumpsite_id or MAIN_ID].read_only
+                move_file(source, target, file.sha256, keep_source=keep)
+                self._move_sidecars(source, target, report, keep)
                 file.status = FileStatus.published
                 file.published_relpath = relpath.as_posix()
                 file.published_at = datetime.now(timezone.utc)
@@ -196,12 +204,12 @@ class Publisher:
                 shot.status = ShotStatus.published
                 report.published_shots += 1
 
-    def _move_sidecars(self, source: Path, target: Path, file: MediaFile, report: PublishReport) -> None:
+    def _move_sidecars(self, source: Path, target: Path, report: PublishReport, keep_source: bool = False) -> None:
         for sidecar, kind in _sidecars(source):
             name = f"{target.name}.xmp" if kind == "full" else f"{target.stem}.xmp"
             destination = target.with_name(name)
             try:
-                move_file(sidecar, destination, sha256_of(sidecar))
+                move_file(sidecar, destination, sha256_of(sidecar), keep_source=keep_source)
             except FileExistsError:
                 report.errors.append(f"Sidecar {sidecar.name} left in the dumpsite: {name} already exists")
             except OSError as exc:

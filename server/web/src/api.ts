@@ -154,6 +154,7 @@ export interface Dumpsite {
   slot: number | null;
   main: boolean;
   enabled: boolean;
+  read_only: boolean;
   host_path: string | null;
   mounted: boolean;
   files: number;
@@ -248,8 +249,8 @@ export const api = {
     return data as LifeList;
   },
   dumpsites: () => request<Dumpsites>("GET", "/api/dumpsites"),
-  addDumpsite: (slot: number, name: string) => request<Dumpsites>("POST", "/api/dumpsites", { slot, name }),
-  updateDumpsite: (id: number, changes: { name?: string; enabled?: boolean }) => request<Dumpsites>("PATCH", `/api/dumpsites/${id}`, changes),
+  addDumpsite: (slot: number, name: string, readOnly: boolean) => request<Dumpsites>("POST", "/api/dumpsites", { slot, name, read_only: readOnly }),
+  updateDumpsite: (id: number, changes: { name?: string; enabled?: boolean; read_only?: boolean }) => request<Dumpsites>("PATCH", `/api/dumpsites/${id}`, changes),
   removeDumpsite: (id: number) => request<Dumpsites>("DELETE", `/api/dumpsites/${id}`),
   settings: () => request<{ values: Settings; defaults: Settings; languages: string[] }>("GET", "/api/settings"),
   updateSettings: (changes: Partial<Settings>) => request<{ values: Settings; defaults: Settings; languages: string[] }>("PUT", "/api/settings", changes),

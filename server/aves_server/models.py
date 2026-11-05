@@ -4,7 +4,7 @@ import enum
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, false, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -292,4 +292,6 @@ class Dumpsite(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True)
     slot: Mapped[int | None] = mapped_column(Integer, unique=True)   # None for the main dumpsite
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)     # False: not scanned (files on record are kept)
+    # True: publishing copies photos into the library and leaves the originals in the dumpsite.
+    read_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -116,3 +116,47 @@ def test_dumpsites_are_added_renamed_and_removed_from_settings(client, scanner, 
     assert client.patch(f"/api/dumpsites/{site['id']}", json={"enabled": False}).json()["dumpsites"][1]["enabled"] is False
     assert client.patch("/api/dumpsites/1", json={"enabled": False}).status_code == 400
     assert client.delete("/api/dumpsites/1").status_code == 400
+
+
+def test_a_read_only_dumpsite_is_copied_from_and_never_changed(client, scanner, clock, config, make_photo, database, slots):  # noqa: F811
+    site_id = _add(database, 2, "Archive")
+    with database.session() as db:
+        db.get(Dumpsite, site_id).read_only = True
+    source = make_photo(slots / "2" / "trip" / "DSC_7.JPG", gps=(11.41, 76.70))
+    (slots / "2" / "trip" / "DSC_7.JPG.xmp").write_text("<x/>")
+    before = source.read_bytes()
+    _settle(scanner, clock)
+    with database.session() as db:
+        shot = db.scalar(select(Shot))
+        Analyzer._store(shot, [_bird("101", 0.97)], (96, 64), True, ["CPUExecutionProvider"])
+        shot.status = ShotStatus.confirmed
+        shot_id = shot.id
+
+    assert Publisher(config, database).publish([shot_id]).published_files == 1
+    published = config.published_dir / "India/Tamil Nadu/Ooty/2026-10-18/JPG/DSC_7.JPG"
+    assert published.read_bytes() == before and source.read_bytes() == before
+    assert published.stat().st_ino != source.stat().st_ino            # a real copy, not a hard link
+    assert (published.parent / "DSC_7.JPG.xmp").is_file() and (source.parent / "DSC_7.JPG.xmp").is_file()
+
+    clock.advance(31)
+    report = _settle(scanner, clock)                                   # the original is still there...
+    assert (report.ingested, report.duplicates, report.missing) == (0, 0, 0)  # ...and is not picked up again
+    with database.session() as db:
+        assert db.scalar(select(Shot)).status == ShotStatus.published
+        assert [f.status for f in db.scalars(select(MediaFile))] == [FileStatus.published]
+
+    listing = client.get("/api/dumpsites").json()
+    assert next(d for d in listing["dumpsites"] if d["id"] == site_id)["read_only"] is True
+    assert client.patch(f"/api/dumpsites/{site_id}", json={"read_only": False}).json()["dumpsites"][1]["read_only"] is False
+
+
+def test_duplicates_are_not_deleted_from_a_read_only_dumpsite(client, scanner, clock, config, make_photo, database, slots):  # noqa: F811
+    site_id = _add(database, 2, "Archive")
+    original = make_photo(config.dump_dir / "X.JPG")
+    shutil.copy2(original, slots / "2" / "X.JPG")
+    _settle(scanner, clock)
+    client.patch(f"/api/dumpsites/{site_id}", json={"read_only": True})
+    duplicate = client.get("/api/duplicates").json()[0]
+    assert duplicate["dumpsite"] == "Archive"
+    assert client.delete(f"/api/duplicates/{duplicate['id']}").status_code == 409
+    assert (slots / "2" / "X.JPG").is_file()

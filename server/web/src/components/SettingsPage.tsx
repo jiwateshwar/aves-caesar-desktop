@@ -159,6 +159,7 @@ function DumpsitesPanel() {
   const loaded = useLoader(() => api.dumpsites(), []);
   const data: Dumpsites | null = loaded.data;
   const [names, setNames] = useState<Record<number, string>>({});
+  const [readOnly, setReadOnly] = useState<Record<number, boolean>>({});
   if (loaded.error) return <section class="page narrow settings"><div class="empty error">{loaded.error}</div></section>;
   if (!data) return null;
 
@@ -175,7 +176,8 @@ function DumpsitesPanel() {
         <legend>Dumpsites</legend>
         <p class="hint">
           Every dumpsite is watched for new photos, and they all go through the same review and publish into the same library.
-          Folders from extra dumpsites appear under the dumpsite's name in a session's folder list.
+          Folders from extra dumpsites appear under the dumpsite's name in a session's folder list. Publishing moves photos out of a
+          dumpsite into the library; tick <b>Read-only</b> to copy them instead and leave the dumpsite exactly as it is.
         </p>
         <table class="dumpsites">
           <tbody>
@@ -199,10 +201,15 @@ function DumpsitesPanel() {
                   <form class="inline-form" onSubmit={async (e) => {
                     e.preventDefault();
                     const name = (names[slot.slot] ?? slot.host_path.split("/").filter(Boolean).pop() ?? "").trim();
-                    if (await run(() => api.addDumpsite(slot.slot, name), `Added ${name}; scanning it now`)) setNames({ ...names, [slot.slot]: "" });
+                    if (await run(() => api.addDumpsite(slot.slot, name, !!readOnly[slot.slot]), `Added ${name}; scanning it now`)) setNames({ ...names, [slot.slot]: "" });
                   }}>
                     <input placeholder={slot.host_path.split("/").filter(Boolean).pop()} value={names[slot.slot] ?? ""}
                            onInput={(e) => setNames({ ...names, [slot.slot]: e.currentTarget.value })} aria-label="Name" />
+                    <label class="check" title="Publishing copies photos into the library and leaves the originals here">
+                      <input type="checkbox" checked={!!readOnly[slot.slot]}
+                             onChange={(e) => setReadOnly({ ...readOnly, [slot.slot]: e.currentTarget.checked })} />
+                      Read-only
+                    </label>
                     <button class="primary">Add</button>
                   </form>
                 ) : (
@@ -241,6 +248,14 @@ function DumpsiteRow({ site, run }: { site: Dumpsite; run: (action: () => Promis
           {" · "}{plural(site.files, "file", "files")} not yet published
           {!site.mounted && <span class="warn"> · not mounted</span>}
         </small>
+        <label class="check read-only">
+          <input type="checkbox" checked={site.read_only} onChange={(e) => {
+            const checked = e.currentTarget.checked;
+            run(() => api.updateDumpsite(site.id, { read_only: checked }),
+              checked ? `${site.name} is read-only: photos are copied, never moved` : `${site.name}: photos are moved when published`);
+          }} />
+          Read-only <small class="muted">(copy when publishing, leave originals in place)</small>
+        </label>
       </td>
       <td class="actions">
         {!site.main && !editing && <button type="button" onClick={() => setEditing(true)}>Rename</button>}

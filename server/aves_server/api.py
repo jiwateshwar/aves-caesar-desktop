@@ -480,11 +480,13 @@ def _job_dict(job: Job) -> dict:
 class DumpsiteCreate(BaseModel):
     slot: int
     name: str = Field(min_length=1, max_length=120)
+    read_only: bool = False
 
 
 class DumpsiteUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     enabled: bool | None = None
+    read_only: bool | None = None
 
 
 def _clean_dumpsite_name(db: OrmSession, name: str, dumpsite_id: int | None = None) -> str:
@@ -499,7 +501,7 @@ def _clean_dumpsite_name(db: OrmSession, name: str, dumpsite_id: int | None = No
 
 def _dumpsite_dict(site, counts: dict) -> dict:
     return {"id": site.id, "name": site.name if site.id != MAIN_ID else state.config.dump_dir.name, "slot": site.slot,
-            "main": site.id == MAIN_ID, "enabled": site.enabled, "host_path": site.host_path,
+            "main": site.id == MAIN_ID, "enabled": site.enabled, "read_only": site.read_only, "host_path": site.host_path,
             "mounted": site.mounted, "files": counts.get(site.id, 0)}
 
 
@@ -518,7 +520,7 @@ def add_dumpsite(body: DumpsiteCreate, db: OrmSession = Depends(get_db)) -> dict
         raise HTTPException(400, f"Slot {body.slot} has no share mounted, or is already in use")
     if not free[body.slot]["mounted"]:
         raise HTTPException(400, f"Slot {body.slot} is configured but not mounted; redeploy the stack first")
-    db.add(Dumpsite(name=_clean_dumpsite_name(db, body.name), slot=body.slot, enabled=True))
+    db.add(Dumpsite(name=_clean_dumpsite_name(db, body.name), slot=body.slot, enabled=True, read_only=body.read_only))
     db.flush()
     job_queue.enqueue(db, "scan")  # pick up what is already in the new share
     return list_dumpsites(db)
@@ -533,6 +535,8 @@ def update_dumpsite(dumpsite_id: int, body: DumpsiteUpdate, db: OrmSession = Dep
         if dumpsite_id == MAIN_ID and not body.enabled:
             raise HTTPException(400, "The main dumpsite can't be turned off")
         site.enabled = body.enabled
+    if body.read_only is not None:
+        site.read_only = body.read_only
     if body.name is not None and dumpsite_id != MAIN_ID:
         old, new = site.name, _clean_dumpsite_name(db, body.name, dumpsite_id)
         site.name = new
@@ -584,6 +588,8 @@ def delete_duplicate(file_id: int, db: OrmSession = Depends(get_db)) -> dict:
     site = roots(db, state.config).get(file.dumpsite_id or MAIN_ID)
     if site is None:
         raise HTTPException(404, "The dumpsite of this file was removed")
+    if site.read_only:
+        raise HTTPException(409, f"{site.name} is read-only; nothing is deleted from it")
     path = (site.root / file.dump_relpath).resolve()
     if site.root.resolve() not in path.parents:
         raise HTTPException(400, "Refusing to delete outside the dumpsite")

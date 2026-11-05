@@ -31,6 +31,7 @@ class DumpsiteRoot:
     enabled: bool
     slot: int | None
     host_path: str | None
+    read_only: bool = False
 
     @property
     def mounted(self) -> bool:
@@ -57,7 +58,8 @@ def roots(db: OrmSession, config: ServerConfig) -> dict[int, DumpsiteRoot]:
     result = {}
     for site in db.scalars(select(Dumpsite).order_by(Dumpsite.id)):
         root = config.dump_dir if site.slot is None else slots_root() / str(site.slot)
-        result[site.id] = DumpsiteRoot(site.id, site.name, root, site.enabled, site.slot, hosts.get(site.slot) if site.slot else None)
+        result[site.id] = DumpsiteRoot(site.id, site.name, root, site.enabled, site.slot, hosts.get(site.slot) if site.slot else None,
+                                       bool(site.read_only))
     if MAIN_ID not in result:  # databases from before migration 0006 are migrated first, but stay safe
         result[MAIN_ID] = DumpsiteRoot(MAIN_ID, config.dump_dir.name, config.dump_dir, True, None, None)
     return result
