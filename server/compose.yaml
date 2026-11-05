@@ -20,6 +20,10 @@ x-app: &app
   # Rebuild on every (re)deploy, so Portainer's automatic Git updates pick up new code. Unchanged layers are cached.
   pull_policy: build
   user: "${PUID:-568}:${PGID:-568}"
+  # An extra group for shares whose access comes from a group rather than the owner, e.g. TrueNAS's
+  # builtin_users (545) on SMB shares. Applies only to the folders mounted below.
+  group_add:
+    - "${EXTRA_GID:-${PGID:-568}}"
   restart: unless-stopped
   environment: &app-env
     AVES_DATABASE_URL: postgresql+psycopg://aves:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/aves
