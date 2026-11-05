@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
@@ -53,6 +54,9 @@ class DumpScanner:
     """Finds new photos in the dumpsite and records them. Never moves or deletes anything."""
 
     BATCH_SIZE = 50
+    # Checksums are read one batch ahead, so the disks stay busy while ExifTool and the database work. Disks, not
+    # the CPU, are the limit: on the NAS, more than 2 readers only adds seeking (measured ~100 MB/s either way).
+    HASH_WORKERS = max(1, int(os.environ.get("AVES_HASH_WORKERS", "2")))
     QUICK_SETTLE_SECONDS = 3.0
 
     def __init__(self, config: ServerConfig, database: Database, metadata: MetadataReader,
@@ -98,15 +102,23 @@ class DumpScanner:
             self._reconcile_known(db, known, found, scanned, sites, report)
 
         ready = self._ready_files({key: c for key, c in found.items() if key not in known}, settings.settle_seconds, quick, report)
-        for start in range(0, len(ready), self.BATCH_SIZE):
-            batch = ready[start:start + self.BATCH_SIZE]
-            try:
-                self._ingest(batch, found, sites, report)
-            except Exception as exc:  # one unreadable batch must not stop the rest
-                logger.exception("Ingest batch failed")
-                report.errors.append(f"{display_path(sites, *batch[0])}: {exc}")
-            if progress:
-                progress(min(start + len(batch), len(ready)), len(ready))
+        batches = [ready[start:start + self.BATCH_SIZE] for start in range(0, len(ready), self.BATCH_SIZE)]
+        with ThreadPoolExecutor(self.HASH_WORKERS, thread_name_prefix="sha256") as pool:
+            hashing = lambda batch: {key: pool.submit(sha256_of, found[key].path) for key in batch}  # noqa: E731
+            upcoming = hashing(batches[0]) if batches else {}
+            done = 0
+            for index, batch in enumerate(batches):
+                digests = upcoming
+                # Start on the next batch's checksums now, so the disks stay busy while this batch is recorded.
+                upcoming = hashing(batches[index + 1]) if index + 1 < len(batches) else {}
+                try:
+                    self._ingest(batch, found, sites, report, digests)
+                except Exception as exc:  # one unreadable batch must not stop the rest
+                    logger.exception("Ingest batch failed")
+                    report.errors.append(f"{display_path(sites, *batch[0])}: {exc}")
+                done += len(batch)
+                if progress:
+                    progress(done, len(ready))
         return report
 
     def _walk(self, root: Path) -> dict[str, _Candidate]:
@@ -174,7 +186,8 @@ class DumpScanner:
         report.waiting = len(unsettled)
         return sorted(ready)
 
-    def _ingest(self, batch: list[Key], found: dict[Key, _Candidate], sites: dict, report: ScanReport) -> None:
+    def _ingest(self, batch: list[Key], found: dict[Key, _Candidate], sites: dict, report: ScanReport,
+                digests: dict[Key, Future] | None = None) -> None:
         metadata = self.metadata.read_many([found[key].path for key in batch])
         with self.database.session() as db:
             settings = SettingsStore.load(db)
@@ -184,7 +197,7 @@ class DumpScanner:
                 candidate = found[key]
                 path = candidate.path
                 try:
-                    digest = sha256_of(path)
+                    digest = digests[key].result() if digests and key in digests else sha256_of(path)
                 except OSError as exc:
                     report.errors.append(f"{display_path(sites, site_id, rel)}: {exc}")
                     continue
