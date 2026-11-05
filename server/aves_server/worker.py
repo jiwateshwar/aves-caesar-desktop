@@ -18,6 +18,7 @@ from bird_desktop.media.image_io import ImageLoader
 from .catalog import SpeciesCatalog
 from .config import ServerConfig
 from .db import Database
+from .dumpsites import file_path, roots, source_of
 from .jobs import claim_next, recover_interrupted
 from .media import MetadataReader, RestartingExifTool, is_lens_code
 from .models import FileStatus, Job, JobStatus, MediaFile, Shot, ShotStatus, WorkerState
@@ -116,9 +117,10 @@ class Worker:
         if self._lens_names_fixed:
             return False
         with self.database.session() as db:
-            candidates = [row for row in db.execute(select(MediaFile.id, MediaFile.lens_model, MediaFile.status, MediaFile.dump_relpath,
+            candidates = [row for row in db.execute(select(MediaFile.id, MediaFile.lens_model, MediaFile.status, MediaFile.dumpsite_id, MediaFile.dump_relpath,
                                                            MediaFile.published_relpath).where(MediaFile.lens_model.is_not(None)))
                           if is_lens_code(row.lens_model) and row.id not in self._lens_unreadable]
+            sites = roots(db, self.config)
         if not candidates:
             self._lens_names_fixed = True
             return False
@@ -126,7 +128,7 @@ class Worker:
         paths = {}
         for row in candidates[:batch]:
             path = (self.config.published_dir / row.published_relpath if row.status == FileStatus.published and row.published_relpath
-                    else self.config.dump_dir / row.dump_relpath if row.dump_relpath else None)
+                    else file_path(sites, row.dumpsite_id, row.dump_relpath) if row.dump_relpath and row.dumpsite_id in sites else None)
             if path is not None and path.is_file():
                 paths[row.id] = path
             else:
@@ -216,7 +218,7 @@ class Worker:
                     shot.preview_ready = True
                     continue
                 try:
-                    loaded = ImageLoader.load(self.config.dump_dir / file.dump_relpath, session=self.exiftool)
+                    loaded = ImageLoader.load(source_of(db, self.config, file), session=self.exiftool)
                 except Exception as exc:
                     logger.warning("Preview failed for %s: %s", file.dump_relpath, exc)
                     shot.preview_ready = True  # don't retry forever; the UI shows a placeholder

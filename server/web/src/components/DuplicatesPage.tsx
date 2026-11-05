@@ -24,13 +24,13 @@ export function DuplicatesPage({ onChange }: { onChange: () => void }) {
           <tbody>
             {duplicates.data.map((d) => (
               <tr key={d.id}>
-                <td><code>{d.dump_relpath}</code> <small class="muted">{formatBytes(d.size_bytes)}</small></td>
+                <td><code>{d.dumpsite}/{d.dump_relpath}</code> <small class="muted">{formatBytes(d.size_bytes)}</small></td>
                 <td>{d.original ? <><code>{d.original.path}</code> <small class="muted">({d.original.status.replace("_", " ")})</small></> : "–"}</td>
                 <td>
                   <button
                     class="danger"
                     onClick={async () => {
-                      if (!window.confirm(`Delete ${d.dump_relpath} from the dumpsite?`)) return;
+                      if (!window.confirm(`Delete ${d.dumpsite}/${d.dump_relpath} from the dumpsite?`)) return;
                       await attempt(() => api.deleteDuplicate(d.id), "Deleted the extra copy");
                       duplicates.reload();
                       onChange();

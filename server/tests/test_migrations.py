@@ -20,7 +20,7 @@ def _models_match(database: Database) -> list:
 def test_a_new_database_built_by_migrations_matches_the_models(database):
     assert _models_match(database) == []
     with database.engine.connect() as connection:
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0005"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0006"
 
 
 def _legacy_database(url: str) -> Database:

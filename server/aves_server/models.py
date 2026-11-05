@@ -91,6 +91,7 @@ class Shot(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"), index=True)
+    dumpsite_id: Mapped[int] = mapped_column(Integer, default=1, server_default="1", index=True)  # see Dumpsite
     dump_folder: Mapped[str] = mapped_column(String(1000), index=True)  # folder relative to the dumpsite
     group_key: Mapped[str] = mapped_column(String(1200), unique=True)   # folder + stem + capture time
     captured_at: Mapped[datetime | None] = mapped_column(DateTime)       # camera local time, naive
@@ -145,7 +146,8 @@ class MediaFile(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     status: Mapped[FileStatus] = mapped_column(_enum(FileStatus), default=FileStatus.in_dump, index=True)
     duplicate_of_id: Mapped[int | None] = mapped_column(ForeignKey("media_files.id"))
-    dump_relpath: Mapped[str | None] = mapped_column(String(1500))
+    dumpsite_id: Mapped[int] = mapped_column(Integer, default=1, server_default="1", index=True)  # see Dumpsite
+    dump_relpath: Mapped[str | None] = mapped_column(String(1500))  # relative to its dumpsite's folder
     published_relpath: Mapped[str | None] = mapped_column(String(1500))
     camera_make: Mapped[str | None] = mapped_column(String(120))
     camera_model: Mapped[str | None] = mapped_column(String(120))
@@ -275,3 +277,19 @@ class LifeListEntry(Base):
     matched_by: Mapped[str | None] = mapped_column(String(16))   # scientific | common | None
 
     life_list: Mapped[LifeListImport] = relationship(back_populates="entries")
+
+
+class Dumpsite(Base):
+    """A folder (usually an SMB share) that camera dumps are copied into.
+
+    Dumpsite 1 is the stack's AVES_DUMP_DIR (root is NULL). Others are shares mounted into the containers at
+    /data/dumpsites/<slot> through the stack's DUMPSITE_<slot> variables, and added from Settings.
+    """
+
+    __tablename__ = "dumpsites"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    slot: Mapped[int | None] = mapped_column(Integer, unique=True)   # None for the main dumpsite
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)     # False: not scanned (files on record are kept)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

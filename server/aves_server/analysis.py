@@ -12,6 +12,7 @@ from bird_desktop.media.image_io import ImageLoader
 
 from .config import ServerConfig
 from .db import Database
+from .dumpsites import source_of
 from .engine import RemoteUnavailable, backend_from_env, load_runtime_config
 from .dating import model_datetime
 from .locations import analysis_coordinates
@@ -69,7 +70,7 @@ class Analyzer:
                     outcome.failed += 1
                     continue
                 try:
-                    image = ImageLoader.load(self.config.dump_dir / file.dump_relpath, session=self.exiftool_session)
+                    image = ImageLoader.load(source_of(db, self.config, file), session=self.exiftool_session)
                 except Exception as exc:
                     logger.exception("Could not open %s", file.dump_relpath)
                     shot.status, shot.analysis_error = ShotStatus.error, f"Could not open {file.original_filename}: {exc}"

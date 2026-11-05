@@ -28,9 +28,18 @@ x-app: &app
     AVES_DATA_DIR: /data/appdata
     AVES_PASSWORD: ${AVES_PASSWORD:-}
     TZ: ${TZ:-UTC}
+    # Extra dumpsites (Settings > Dumpsites) read which share is in which slot from here.
+    AVES_DUMPSITE_SLOTS: "2=${DUMPSITE_2:-};3=${DUMPSITE_3:-};4=${DUMPSITE_4:-};5=${DUMPSITE_5:-};6=${DUMPSITE_6:-}"
   volumes:
     - ${PHOTOS_DATASET:?set PHOTOS_DATASET}:/data/photos
     - ${APPDATA_PATH:?set APPDATA_PATH}:/data/appdata
+    # Extra dumpsites: set DUMPSITE_2 ... DUMPSITE_6 to a share's folder on the NAS and redeploy, then add it in
+    # Settings. Unused slots mount an empty placeholder folder, which the app ignores.
+    - ${DUMPSITE_2:-${APPDATA_PATH}/.unused-dumpsite}:/data/dumpsites/2
+    - ${DUMPSITE_3:-${APPDATA_PATH}/.unused-dumpsite}:/data/dumpsites/3
+    - ${DUMPSITE_4:-${APPDATA_PATH}/.unused-dumpsite}:/data/dumpsites/4
+    - ${DUMPSITE_5:-${APPDATA_PATH}/.unused-dumpsite}:/data/dumpsites/5
+    - ${DUMPSITE_6:-${APPDATA_PATH}/.unused-dumpsite}:/data/dumpsites/6
   depends_on:
     db:
       condition: service_healthy

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { api, type LifeList, type Settings } from "../api";
+import { api, type Dumpsite, type Dumpsites, type LifeList, type Settings } from "../api";
 import { attempt, formatDate, plural, useLoader } from "../util";
 
 export function SettingsPage() {
@@ -87,6 +87,7 @@ export function SettingsPage() {
         <button class="primary">Save settings</button>
       </div>
     </form>
+    <DumpsitesPanel />
     <LifeListPanel />
     </>
   );
@@ -151,5 +152,111 @@ function LifeListPanel() {
         </div>
       </fieldset>
     </section>
+  );
+}
+
+function DumpsitesPanel() {
+  const loaded = useLoader(() => api.dumpsites(), []);
+  const data: Dumpsites | null = loaded.data;
+  const [names, setNames] = useState<Record<number, string>>({});
+  if (loaded.error) return <section class="page narrow settings"><div class="empty error">{loaded.error}</div></section>;
+  if (!data) return null;
+
+  const run = async (action: () => Promise<Dumpsites>, message: string) => {
+    const result = await attempt(action, message);
+    if (result) loaded.setData(result);
+    return result;
+  };
+  const free = data.available_slots;
+
+  return (
+    <section class="page narrow settings">
+      <fieldset>
+        <legend>Dumpsites</legend>
+        <p class="hint">
+          Every dumpsite is watched for new photos, and they all go through the same review and publish into the same library.
+          Folders from extra dumpsites appear under the dumpsite's name in a session's folder list.
+        </p>
+        <table class="dumpsites">
+          <tbody>
+            {data.dumpsites.map((site) => <DumpsiteRow key={site.id} site={site} run={run} />)}
+          </tbody>
+        </table>
+
+        <h4>Add a dumpsite</h4>
+        {free.length === 0 ? (
+          <p class="muted">
+            No share is waiting to be added. SMB shares on this TrueNAS are added to the stack first: set one of{" "}
+            {data.slot_numbers.map((n, i) => <span key={n}>{i ? ", " : ""}<code>DUMPSITE_{n}</code></span>)} in the Portainer stack's
+            environment to the share's folder (e.g. <code>/mnt/MasterPool/Wildlife/Phone</code>) and redeploy. It then shows up here.
+          </p>
+        ) : (
+          <ul class="slot-list">
+            {free.map((slot) => (
+              <li key={slot.slot}>
+                <code>{slot.host_path}</code>{" "}
+                {slot.mounted ? (
+                  <form class="inline-form" onSubmit={async (e) => {
+                    e.preventDefault();
+                    const name = (names[slot.slot] ?? slot.host_path.split("/").filter(Boolean).pop() ?? "").trim();
+                    if (await run(() => api.addDumpsite(slot.slot, name), `Added ${name}; scanning it now`)) setNames({ ...names, [slot.slot]: "" });
+                  }}>
+                    <input placeholder={slot.host_path.split("/").filter(Boolean).pop()} value={names[slot.slot] ?? ""}
+                           onInput={(e) => setNames({ ...names, [slot.slot]: e.currentTarget.value })} aria-label="Name" />
+                    <button class="primary">Add</button>
+                  </form>
+                ) : (
+                  <small class="warn">set in the stack but not mounted yet; redeploy the stack</small>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </fieldset>
+    </section>
+  );
+}
+
+function DumpsiteRow({ site, run }: { site: Dumpsite; run: (action: () => Promise<Dumpsites>, message: string) => Promise<Dumpsites | undefined> }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(site.name);
+  return (
+    <tr class={site.enabled ? "" : "muted"}>
+      <td>
+        {editing ? (
+          <form class="inline-form" onSubmit={async (e) => {
+            e.preventDefault();
+            if (await run(() => api.updateDumpsite(site.id, { name }), "Dumpsite renamed")) setEditing(false);
+          }}>
+            <input value={name} onInput={(e) => setName(e.currentTarget.value)} aria-label="Name" />
+            <button class="primary">Save</button>
+            <button type="button" onClick={() => { setEditing(false); setName(site.name); }}>Cancel</button>
+          </form>
+        ) : (
+          <b>{site.name}</b>
+        )}
+        <br />
+        <small class="muted">
+          {site.main ? "Main dumpsite" : <code>{site.host_path ?? `slot ${site.slot}`}</code>}
+          {" · "}{plural(site.files, "file", "files")} not yet published
+          {!site.mounted && <span class="warn"> · not mounted</span>}
+        </small>
+      </td>
+      <td class="actions">
+        {!site.main && !editing && <button type="button" onClick={() => setEditing(true)}>Rename</button>}
+        {!site.main && (
+          <button type="button" onClick={() => run(() => api.updateDumpsite(site.id, { enabled: !site.enabled }),
+            site.enabled ? `${site.name} is no longer watched` : `${site.name} is watched again`)}>
+            {site.enabled ? "Turn off" : "Turn on"}
+          </button>
+        )}
+        {!site.main && site.files === 0 && (
+          <button type="button" class="danger" onClick={() => {
+            if (window.confirm(`Remove ${site.name}? Photos already published stay in the library; files in the share are not touched.`))
+              run(() => api.removeDumpsite(site.id), `${site.name} removed`);
+          }}>Remove</button>
+        )}
+      </td>
+    </tr>
   );
 }

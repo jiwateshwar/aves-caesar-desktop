@@ -26,9 +26,10 @@ from .dating import shift_session_date
 from .lifelist import LifeListError, import_life_list, life_species_ids, parse_ebird_csv
 from .config import ServerConfig
 from .db import Database
+from .dumpsites import MAIN_ID, SLOTS, available_slots, file_path, roots
 from .geocoding import Geocoder
 from .locations import UNPUBLISHED, clear_session_location, set_analyse_without_location, set_session_location
-from .models import FileStatus, Job, JobStatus, LifeListEntry, LifeListImport, MediaFile, Session, Shot, ShotStatus, WorkerState
+from .models import Dumpsite, FileStatus, Job, JobStatus, LifeListEntry, LifeListImport, MediaFile, Session, Shot, ShotStatus, WorkerState
 from .previews import PreviewStore
 from .publisher import ConflictChecker
 from .review import (ReviewError, add_species, append_suffix, confirm_confident, confirm_shot, ignore_shot, reject_detection,
@@ -110,13 +111,21 @@ def _shot(db: OrmSession, shot_id: int) -> Shot:
     return shot
 
 
+def _dumpsite_name(db: OrmSession, dumpsite_id: int | None) -> str:
+    """The folder name the photographer sees over SMB for a dumpsite."""
+    if not dumpsite_id or dumpsite_id == MAIN_ID:
+        return state.config.dump_dir.name
+    site = db.get(Dumpsite, dumpsite_id)
+    return site.name if site else "Dumpsite"
+
+
 def _shot_response(db: OrmSession, shot: Shot) -> dict:
     db.flush()
     settings = SettingsStore.load(db)
     conflicts = ConflictChecker(db).conflicts([f.id for f in shot.files])
     # Folder names as the photographer sees them over SMB (the container paths mean nothing to them).
     return {**shot_dict(shot, catalog(), settings, conflicts, detail=True, life_list=life_species_ids(db)),
-            "dumpsite_name": state.config.dump_dir.name, "published_name": state.config.published_dir.name}
+            "dumpsite_name": _dumpsite_name(db, shot.dumpsite_id), "published_name": state.config.published_dir.name}
 
 
 # ---------------------------------------------------------------- status
@@ -305,7 +314,10 @@ def download_file(file_id: int, db: OrmSession = Depends(get_db)):
     if file.status == FileStatus.published and file.published_relpath:
         path = state.config.published_dir / file.published_relpath
     elif file.dump_relpath:
-        path = state.config.dump_dir / file.dump_relpath
+        try:
+            path = file_path(roots(db, state.config), file.dumpsite_id, file.dump_relpath)
+        except LookupError:
+            raise HTTPException(404, "The dumpsite of this file was removed")
     else:
         raise HTTPException(404)
     if not path.is_file():
@@ -463,13 +475,100 @@ def _job_dict(job: Job) -> dict:
             "created_at": iso(job.created_at), "finished_at": iso(job.finished_at)}
 
 
+# ---------------------------------------------------------------- dumpsites
+
+class DumpsiteCreate(BaseModel):
+    slot: int
+    name: str = Field(min_length=1, max_length=120)
+
+
+class DumpsiteUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    enabled: bool | None = None
+
+
+def _clean_dumpsite_name(db: OrmSession, name: str, dumpsite_id: int | None = None) -> str:
+    name = name.strip()
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        raise HTTPException(400, "Use a plain name without slashes")
+    clash = db.scalar(select(Dumpsite).where(func.lower(Dumpsite.name) == name.lower(), Dumpsite.id != (dumpsite_id or 0)))
+    if clash is not None:
+        raise HTTPException(409, f"There is already a dumpsite called {clash.name}")
+    return name
+
+
+def _dumpsite_dict(site, counts: dict) -> dict:
+    return {"id": site.id, "name": site.name if site.id != MAIN_ID else state.config.dump_dir.name, "slot": site.slot,
+            "main": site.id == MAIN_ID, "enabled": site.enabled, "host_path": site.host_path,
+            "mounted": site.mounted, "files": counts.get(site.id, 0)}
+
+
+@app.get("/api/dumpsites")
+def list_dumpsites(db: OrmSession = Depends(get_db)) -> dict:
+    counts = dict(db.execute(select(MediaFile.dumpsite_id, func.count()).where(MediaFile.status != FileStatus.published)
+                             .group_by(MediaFile.dumpsite_id)).all())
+    return {"dumpsites": [_dumpsite_dict(site, counts) for site in roots(db, state.config).values()],
+            "available_slots": available_slots(db), "slot_numbers": list(SLOTS)}
+
+
+@app.post("/api/dumpsites")
+def add_dumpsite(body: DumpsiteCreate, db: OrmSession = Depends(get_db)) -> dict:
+    free = {item["slot"]: item for item in available_slots(db)}
+    if body.slot not in free:
+        raise HTTPException(400, f"Slot {body.slot} has no share mounted, or is already in use")
+    if not free[body.slot]["mounted"]:
+        raise HTTPException(400, f"Slot {body.slot} is configured but not mounted; redeploy the stack first")
+    db.add(Dumpsite(name=_clean_dumpsite_name(db, body.name), slot=body.slot, enabled=True))
+    db.flush()
+    job_queue.enqueue(db, "scan")  # pick up what is already in the new share
+    return list_dumpsites(db)
+
+
+@app.patch("/api/dumpsites/{dumpsite_id}")
+def update_dumpsite(dumpsite_id: int, body: DumpsiteUpdate, db: OrmSession = Depends(get_db)) -> dict:
+    site = db.get(Dumpsite, dumpsite_id)
+    if site is None:
+        raise HTTPException(404, "Dumpsite not found")
+    if body.enabled is not None:
+        if dumpsite_id == MAIN_ID and not body.enabled:
+            raise HTTPException(400, "The main dumpsite can't be turned off")
+        site.enabled = body.enabled
+    if body.name is not None and dumpsite_id != MAIN_ID:
+        old, new = site.name, _clean_dumpsite_name(db, body.name, dumpsite_id)
+        site.name = new
+        # Session folder filters show this dumpsite's folders under its name.
+        for shot in db.scalars(select(Shot).where(Shot.dumpsite_id == dumpsite_id)):
+            if shot.dump_folder == old or shot.dump_folder.startswith(old + "/"):
+                shot.dump_folder = new + shot.dump_folder[len(old):]
+    db.flush()
+    return list_dumpsites(db)
+
+
+@app.delete("/api/dumpsites/{dumpsite_id}")
+def remove_dumpsite(dumpsite_id: int, db: OrmSession = Depends(get_db)) -> dict:
+    site = db.get(Dumpsite, dumpsite_id)
+    if site is None:
+        raise HTTPException(404, "Dumpsite not found")
+    if dumpsite_id == MAIN_ID:
+        raise HTTPException(400, "The main dumpsite can't be removed")
+    in_use = db.scalar(select(func.count()).select_from(MediaFile).where(MediaFile.dumpsite_id == dumpsite_id,
+                                                                         MediaFile.status != FileStatus.published))
+    if in_use:
+        raise HTTPException(409, f"{in_use} files from this dumpsite are not published yet; turn it off instead")
+    db.delete(site)
+    db.flush()
+    return list_dumpsites(db)
+
+
 # ---------------------------------------------------------------- duplicates
 
 @app.get("/api/duplicates")
 def list_duplicates(db: OrmSession = Depends(get_db)) -> list[dict]:
     files = db.scalars(select(MediaFile).where(MediaFile.status == FileStatus.duplicate).order_by(MediaFile.dump_relpath)).all()
     originals = {f.id: f for f in db.scalars(select(MediaFile).where(MediaFile.id.in_({f.duplicate_of_id for f in files})))}
-    return [{"id": f.id, "dump_relpath": f.dump_relpath, "size_bytes": f.size_bytes,
+    names = {d.id: d.name for d in db.scalars(select(Dumpsite))}
+    names[MAIN_ID] = state.config.dump_dir.name
+    return [{"id": f.id, "dump_relpath": f.dump_relpath, "dumpsite": names.get(f.dumpsite_id, "Dumpsite"), "size_bytes": f.size_bytes,
              "original": {"id": o.id, "status": o.status.value, "path": o.published_relpath or o.dump_relpath} if (o := originals.get(f.duplicate_of_id)) else None}
             for f in files]
 
@@ -482,8 +581,11 @@ def delete_duplicate(file_id: int, db: OrmSession = Depends(get_db)) -> dict:
     file = db.get(MediaFile, file_id)
     if file is None or file.status != FileStatus.duplicate or not file.dump_relpath:
         raise HTTPException(404, "Not a known duplicate")
-    path = (state.config.dump_dir / file.dump_relpath).resolve()
-    if state.config.dump_dir.resolve() not in path.parents:
+    site = roots(db, state.config).get(file.dumpsite_id or MAIN_ID)
+    if site is None:
+        raise HTTPException(404, "The dumpsite of this file was removed")
+    path = (site.root / file.dump_relpath).resolve()
+    if site.root.resolve() not in path.parents:
         raise HTTPException(400, "Refusing to delete outside the dumpsite")
     if path.is_file():
         if sha256_of(path) != file.sha256:

@@ -148,9 +148,27 @@ export interface Settings {
   city_min_population: number;
 }
 
+export interface Dumpsite {
+  id: number;
+  name: string;
+  slot: number | null;
+  main: boolean;
+  enabled: boolean;
+  host_path: string | null;
+  mounted: boolean;
+  files: number;
+}
+
+export interface Dumpsites {
+  dumpsites: Dumpsite[];
+  available_slots: { slot: number; host_path: string; mounted: boolean }[];
+  slot_numbers: number[];
+}
+
 export interface Duplicate {
   id: number;
   dump_relpath: string;
+  dumpsite: string;
   size_bytes: number;
   original: { id: number; status: string; path: string } | null;
 }
@@ -229,6 +247,10 @@ export const api = {
     if (!response.ok) throw new ApiError(response.status, typeof data.detail === "string" ? data.detail : response.statusText);
     return data as LifeList;
   },
+  dumpsites: () => request<Dumpsites>("GET", "/api/dumpsites"),
+  addDumpsite: (slot: number, name: string) => request<Dumpsites>("POST", "/api/dumpsites", { slot, name }),
+  updateDumpsite: (id: number, changes: { name?: string; enabled?: boolean }) => request<Dumpsites>("PATCH", `/api/dumpsites/${id}`, changes),
+  removeDumpsite: (id: number) => request<Dumpsites>("DELETE", `/api/dumpsites/${id}`),
   settings: () => request<{ values: Settings; defaults: Settings; languages: string[] }>("GET", "/api/settings"),
   updateSettings: (changes: Partial<Settings>) => request<{ values: Settings; defaults: Settings; languages: string[] }>("PUT", "/api/settings", changes),
 };

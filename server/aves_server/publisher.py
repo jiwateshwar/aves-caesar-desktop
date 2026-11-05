@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session as OrmSession
 
 from .config import ServerConfig
 from .db import Database
+from .dumpsites import file_path, roots
 from .media import is_ignored_dir, sha256_of
 from .models import FileStatus, LibraryFile, MediaFile, Shot, ShotStatus
 from .settings import SettingsStore, WorkflowSettings
@@ -166,8 +167,9 @@ class Publisher:
             files = dump_files(shot)
             plan = [(file, target_folder(shot, file, settings) / file.final_filename) for file in files]
 
+            sites = roots(db, self.config)
             for file, _relpath in plan:
-                if not (self.config.dump_dir / file.dump_relpath).is_file():
+                if not file_path(sites, file.dumpsite_id, file.dump_relpath).is_file():
                     file.status = FileStatus.missing
                     report.errors.append(f"{file.original_filename} is no longer in the dumpsite")
                     return
@@ -179,7 +181,7 @@ class Publisher:
                 return
 
             for file, relpath in plan:
-                source = self.config.dump_dir / file.dump_relpath
+                source = file_path(sites, file.dumpsite_id, file.dump_relpath)
                 target = self.config.published_dir / relpath.as_posix()
                 move_file(source, target, file.sha256)
                 self._move_sidecars(source, target, file, report)
