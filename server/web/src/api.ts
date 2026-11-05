@@ -164,6 +164,14 @@ export interface Dumpsites {
   dumpsites: Dumpsite[];
   available_slots: { slot: number; host_path: string; mounted: boolean }[];
   slot_numbers: number[];
+  stack: {
+    self_service: boolean;
+    busy: string | null;
+    error: string | null;
+    shares: { name: string; path: string; enabled: boolean; blocked: string | null }[];
+    shares_error: string | null;
+  };
+  restarting?: boolean;
 }
 
 export interface Duplicate {
@@ -251,6 +259,8 @@ export const api = {
   dumpsites: () => request<Dumpsites>("GET", "/api/dumpsites"),
   addDumpsite: (slot: number, name: string, readOnly: boolean) => request<Dumpsites>("POST", "/api/dumpsites", { slot, name, read_only: readOnly }),
   updateDumpsite: (id: number, changes: { name?: string; enabled?: boolean; read_only?: boolean }) => request<Dumpsites>("PATCH", `/api/dumpsites/${id}`, changes),
+  addShare: (path: string, name: string, readOnly: boolean) =>
+    request<Dumpsites>("POST", "/api/dumpsites/shares", { path, name, read_only: readOnly }),
   removeDumpsite: (id: number) => request<Dumpsites>("DELETE", `/api/dumpsites/${id}`),
   settings: () => request<{ values: Settings; defaults: Settings; languages: string[] }>("GET", "/api/settings"),
   updateSettings: (changes: Partial<Settings>) => request<{ values: Settings; defaults: Settings; languages: string[] }>("PUT", "/api/settings", changes),

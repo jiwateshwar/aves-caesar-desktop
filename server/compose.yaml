@@ -72,6 +72,19 @@ services:
   web:
     <<: *app
     command: ["web"]
+    environment:
+      <<: *app-env
+      # Optional: lets Settings > Dumpsites list this NAS's SMB shares and mount one by updating and redeploying
+      # this stack. Only the web service gets these. Leave empty to add shares by editing the stack instead.
+      AVES_PORTAINER_URL: ${AVES_PORTAINER_URL:-}
+      AVES_PORTAINER_TOKEN: ${AVES_PORTAINER_TOKEN:-}
+      AVES_PORTAINER_STACK_ID: ${AVES_PORTAINER_STACK_ID:-}
+      AVES_PORTAINER_ENDPOINT_ID: ${AVES_PORTAINER_ENDPOINT_ID:-}
+      AVES_TRUENAS_URL: ${AVES_TRUENAS_URL:-}
+      AVES_TRUENAS_API_KEY: ${AVES_TRUENAS_API_KEY:-}
+      # Never offered as dumpsites: the photo dataset (main dumpsite + library) and the app data.
+      AVES_PHOTOS_HOST_PATH: ${PHOTOS_DATASET}
+      AVES_APPDATA_HOST_PATH: ${APPDATA_PATH}
     ports:
       - "${AVES_PORT:-8095}:8080"
     healthcheck:

@@ -160,3 +160,58 @@ def test_duplicates_are_not_deleted_from_a_read_only_dumpsite(client, scanner, c
     assert duplicate["dumpsite"] == "Archive"
     assert client.delete(f"/api/duplicates/{duplicate['id']}").status_code == 409
     assert (slots / "2" / "X.JPG").is_file()
+
+
+@pytest.fixture
+def nas(monkeypatch):
+    """A fake TrueNAS (SMB shares) and Portainer (the stack's variables), and redeploys recorded instead of run."""
+    from aves_server import stackadmin
+
+    for key, value in {"AVES_PORTAINER_URL": "https://nas:31015", "AVES_PORTAINER_TOKEN": "ptr", "AVES_PORTAINER_STACK_ID": "37",
+                       "AVES_TRUENAS_URL": "nas", "AVES_TRUENAS_API_KEY": "key", "AVES_PHOTOS_HOST_PATH": "/mnt/Pool/Wildlife",
+                       "AVES_APPDATA_HOST_PATH": "/mnt/Pool/Wildlife/AppData"}.items():
+        monkeypatch.setenv(key, value)
+    fake = {"env": [{"name": "DUMPSITE_2", "value": "/mnt/Pool/WildHome"}, {"name": "TZ", "value": "UTC"}], "deploys": []}
+    shares = [{"name": n, "path": p, "enabled": True} for n, p in (("WildHome", "/mnt/Pool/WildHome"), ("wildlife1", "/mnt/Pool/Wildlife"),
+              ("MegaTank", "/mnt/Pool/MegaTank"), ("Pics", "/mnt/Pool/MegaTank/Pics"), ("Tank", "/mnt/Pool/Tank"))]
+
+    def request(url, headers, method="GET", body=None, timeout=20):
+        if "/sharing/smb" in url:
+            return shares
+        if method == "GET":
+            return {"Env": fake["env"], "GitConfig": {"ReferenceName": "refs/heads/x"}}
+        fake["env"] = body["Env"]
+        fake["deploys"].append({e["name"]: e["value"] for e in body["Env"]})
+        return {}
+
+    monkeypatch.setattr(stackadmin.StackAdmin, "_request", staticmethod(request))
+    monkeypatch.setattr(stackadmin.Redeployer, "start", lambda self, admin, change, what: admin._redeploy(change))
+    return fake
+
+
+def test_shares_on_the_nas_are_added_and_removed_from_settings(client, database, slots, nas):  # noqa: F811
+    _add(database, 2, "WildHome")
+    stack = client.get("/api/dumpsites").json()["stack"]
+    assert stack["self_service"] is True
+    blocked = {s["name"]: s["blocked"] for s in stack["shares"]}
+    assert blocked["WildHome"] == "Already the dumpsite WildHome"
+    assert "published library" in blocked["wildlife1"]
+    assert blocked["MegaTank"] is None and blocked["Tank"] is None
+
+    assert client.post("/api/dumpsites/shares", json={"path": "/mnt/Pool/Elsewhere", "name": "X"}).status_code == 400  # not a share
+    assert client.post("/api/dumpsites/shares", json={"path": "/mnt/Pool/Wildlife", "name": "X"}).status_code == 409
+    added = client.post("/api/dumpsites/shares", json={"path": "/mnt/Pool/MegaTank", "name": "Mega", "read_only": True}).json()
+    assert added["restarting"] is True
+    assert nas["deploys"][-1]["DUMPSITE_3"] == "/mnt/Pool/MegaTank" and nas["deploys"][-1]["TZ"] == "UTC"
+    site = next(d for d in added["dumpsites"] if d["name"] == "Mega")
+    assert (site["slot"], site["read_only"], site["mounted"]) == (3, True, False)  # mounted once the stack has restarted
+    assert {s["name"]: s["blocked"] for s in added["stack"]["shares"]}["Pics"] == "Overlaps the dumpsite Mega (/mnt/Pool/MegaTank)"
+
+    removed = client.delete(f"/api/dumpsites/{site['id']}").json()
+    assert removed["restarting"] is True and "DUMPSITE_3" not in nas["deploys"][-1]
+
+
+def test_without_stack_access_settings_only_explains(client, slots):  # noqa: F811
+    stack = client.get("/api/dumpsites").json()["stack"]
+    assert (stack["self_service"], stack["shares"]) == (False, [])
+    assert client.post("/api/dumpsites/shares", json={"path": "/mnt/x", "name": "X"}).status_code == 400

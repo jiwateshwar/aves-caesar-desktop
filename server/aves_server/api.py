@@ -26,6 +26,7 @@ from .dating import shift_session_date
 from .lifelist import LifeListError, import_life_list, life_species_ids, parse_ebird_csv
 from .config import ServerConfig
 from .db import Database
+from . import stackadmin
 from .dumpsites import MAIN_ID, SLOTS, available_slots, file_path, roots
 from .geocoding import Geocoder
 from .locations import UNPUBLISHED, clear_session_location, set_analyse_without_location, set_session_location
@@ -510,7 +511,70 @@ def list_dumpsites(db: OrmSession = Depends(get_db)) -> dict:
     counts = dict(db.execute(select(MediaFile.dumpsite_id, func.count()).where(MediaFile.status != FileStatus.published)
                              .group_by(MediaFile.dumpsite_id)).all())
     return {"dumpsites": [_dumpsite_dict(site, counts) for site in roots(db, state.config).values()],
-            "available_slots": available_slots(db), "slot_numbers": list(SLOTS)}
+            "available_slots": available_slots(db), "slot_numbers": list(SLOTS), "stack": _stack_status(db)}
+
+
+def _stack_status(db: OrmSession) -> dict:
+    """The NAS's SMB shares and whether each can be added, when the app may update its own stack."""
+    admin = stackadmin.StackAdmin.from_env()
+    status = {"self_service": admin is not None, "busy": stackadmin.redeployer.running, "error": stackadmin.redeployer.error,
+              "shares": [], "shares_error": None}
+    if admin is None:
+        return status
+    try:
+        shares, env_slots = admin.shares(), admin.mounted_slots(admin.stack_env())
+    except stackadmin.StackAdminError as exc:
+        status["shares_error"] = str(exc)
+        return status
+    paths = _dumpsite_host_paths(db, env_slots)
+    free = stackadmin.free_slot(env_slots, set(db.scalars(select(Dumpsite.slot).where(Dumpsite.slot.is_not(None)))))
+    for share in shares:
+        reason = admin.blocked_reason(share["path"], paths)
+        if reason is None and free is None:
+            reason = f"All {len(SLOTS)} dumpsite slots are in use; remove a dumpsite first"
+        status["shares"].append({**share, "blocked": reason})
+    return status
+
+
+def _dumpsite_host_paths(db: OrmSession, env_slots: dict[int, str]) -> dict[str, str]:
+    """Host folder -> dumpsite name, for every share the stack mounts (also ones not added in Settings yet)."""
+    names = {site.slot: site.name for site in db.scalars(select(Dumpsite).where(Dumpsite.slot.is_not(None)))}
+    return {path: names.get(slot, f"in slot {slot}, not added yet") for slot, path in env_slots.items()}
+
+
+class ShareAdd(BaseModel):
+    path: str
+    name: str = Field(min_length=1, max_length=120)
+    read_only: bool = False
+
+
+@app.post("/api/dumpsites/shares")
+def add_share(body: ShareAdd, db: OrmSession = Depends(get_db)) -> dict:
+    """Mounts one of the NAS's SMB shares as a new dumpsite. Restarts the app."""
+    admin = stackadmin.StackAdmin.from_env()
+    if admin is None:
+        raise HTTPException(400, "This deployment can't change its own stack; mount the share in the stack instead")
+    try:
+        share = next((s for s in admin.shares() if s["path"] == body.path.rstrip("/")), None)
+        env_slots = admin.mounted_slots(admin.stack_env())
+    except stackadmin.StackAdminError as exc:
+        raise HTTPException(502, str(exc))
+    if share is None:
+        raise HTTPException(400, "That is not one of this NAS's SMB shares")
+    reason = admin.blocked_reason(share["path"], _dumpsite_host_paths(db, env_slots))
+    if reason:
+        raise HTTPException(409, reason)
+    slot = stackadmin.free_slot(env_slots, set(db.scalars(select(Dumpsite.slot).where(Dumpsite.slot.is_not(None)))))
+    if slot is None:
+        raise HTTPException(409, f"All {len(SLOTS)} dumpsite slots are in use; remove a dumpsite first")
+    name = _clean_dumpsite_name(db, body.name)
+    db.add(Dumpsite(name=name, slot=slot, enabled=True, read_only=body.read_only))
+    db.commit()  # before the restart
+    try:
+        stackadmin.redeployer.start(admin, {f"DUMPSITE_{slot}": share["path"]}, f"Mounting {name}")
+    except stackadmin.StackAdminError as exc:
+        raise HTTPException(409, str(exc))
+    return {**list_dumpsites(db), "restarting": True}
 
 
 @app.post("/api/dumpsites")
@@ -559,9 +623,18 @@ def remove_dumpsite(dumpsite_id: int, db: OrmSession = Depends(get_db)) -> dict:
                                                                          MediaFile.status != FileStatus.published))
     if in_use:
         raise HTTPException(409, f"{in_use} files from this dumpsite are not published yet; turn it off instead")
+    slot = site.slot
     db.delete(site)
-    db.flush()
-    return list_dumpsites(db)
+    db.commit()
+    admin = stackadmin.StackAdmin.from_env()
+    restarting = False
+    if admin is not None and slot is not None:
+        try:  # unmount the share too
+            stackadmin.redeployer.start(admin, {f"DUMPSITE_{slot}": None}, f"Unmounting {site.name}")
+            restarting = True
+        except stackadmin.StackAdminError:
+            pass  # another redeploy is running; the slot stays mounted but unused
+    return {**list_dumpsites(db), "restarting": restarting}
 
 
 # ---------------------------------------------------------------- duplicates

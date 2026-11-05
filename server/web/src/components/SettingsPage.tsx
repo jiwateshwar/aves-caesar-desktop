@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import { api, type Dumpsite, type Dumpsites, type LifeList, type Settings } from "../api";
-import { attempt, formatDate, plural, useLoader } from "../util";
+import { attempt, formatDate, plural, toast, useLoader } from "../util";
 
 export function SettingsPage() {
   const loaded = useLoader(() => api.settings(), []);
@@ -158,17 +158,47 @@ function LifeListPanel() {
 function DumpsitesPanel() {
   const loaded = useLoader(() => api.dumpsites(), []);
   const data: Dumpsites | null = loaded.data;
-  const [names, setNames] = useState<Record<number, string>>({});
-  const [readOnly, setReadOnly] = useState<Record<number, boolean>>({});
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [readOnly, setReadOnly] = useState<Record<string, boolean>>({});
+  // While the stack redeploys, the app restarts: wait for it to come back with the change in place.
+  const [waiting, setWaiting] = useState<{ what: string; mountedName?: string } | null>(null);
+
+  useEffect(() => {
+    if (!waiting) return;
+    let wentDown = false;
+    const started = Date.now();
+    const timer = window.setInterval(async () => {
+      try {
+        const result = await api.dumpsites();
+        const mounted = waiting.mountedName ? result.dumpsites.some((d) => d.name === waiting.mountedName && d.mounted) : false;
+        if (result.stack.error || mounted || (wentDown && !result.stack.busy) || Date.now() - started > 240_000) {
+          loaded.setData(result);
+          setWaiting(null);
+          if (result.stack.error) toast(result.stack.error, "error");
+          else if (mounted) toast(`${waiting.mountedName} is mounted; scanning it now`);
+        }
+      } catch {
+        wentDown = true; // restarting
+      }
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [waiting]);
+
   if (loaded.error) return <section class="page narrow settings"><div class="empty error">{loaded.error}</div></section>;
   if (!data) return null;
 
-  const run = async (action: () => Promise<Dumpsites>, message: string) => {
+  const run = async (action: () => Promise<Dumpsites>, message: string, mountedName?: string) => {
     const result = await attempt(action, message);
-    if (result) loaded.setData(result);
+    if (result) {
+      loaded.setData(result);
+      if (result.restarting) setWaiting({ what: message, mountedName });
+    }
     return result;
   };
   const free = data.available_slots;
+  const stack = data.stack;
+  const busy = waiting !== null || stack.busy !== null;
+  const defaultName = (path: string) => path.split("/").filter(Boolean).pop() ?? "";
 
   return (
     <section class="page narrow settings">
@@ -179,6 +209,13 @@ function DumpsitesPanel() {
           Folders from extra dumpsites appear under the dumpsite's name in a session's folder list. Publishing moves photos out of a
           dumpsite into the library; tick <b>Read-only</b> to copy them instead and leave the dumpsite exactly as it is.
         </p>
+        {busy && (
+          <p class="notice">
+            <b>{waiting?.what ?? stack.busy}</b>. Featherbase is restarting to mount the change; this takes about a minute and the
+            list below updates by itself.
+          </p>
+        )}
+        {!busy && stack.error && <p class="warn">{stack.error}</p>}
         <table class="dumpsites">
           <tbody>
             {data.dumpsites.map((site) => <DumpsiteRow key={site.id} site={site} run={run} />)}
@@ -186,32 +223,16 @@ function DumpsitesPanel() {
         </table>
 
         <h4>Add a dumpsite</h4>
-        {free.length === 0 ? (
-          <p class="muted">
-            No share is waiting to be added. SMB shares on this TrueNAS are added to the stack first: set one of{" "}
-            {data.slot_numbers.map((n, i) => <span key={n}>{i ? ", " : ""}<code>DUMPSITE_{n}</code></span>)} in the Portainer stack's
-            environment to the share's folder (e.g. <code>/mnt/MasterPool/Wildlife/Phone</code>) and redeploy. It then shows up here.
-          </p>
-        ) : (
+        {free.length > 0 && (
           <ul class="slot-list">
             {free.map((slot) => (
               <li key={slot.slot}>
                 <code>{slot.host_path}</code>{" "}
                 {slot.mounted ? (
-                  <form class="inline-form" onSubmit={async (e) => {
-                    e.preventDefault();
-                    const name = (names[slot.slot] ?? slot.host_path.split("/").filter(Boolean).pop() ?? "").trim();
-                    if (await run(() => api.addDumpsite(slot.slot, name, !!readOnly[slot.slot]), `Added ${name}; scanning it now`)) setNames({ ...names, [slot.slot]: "" });
-                  }}>
-                    <input placeholder={slot.host_path.split("/").filter(Boolean).pop()} value={names[slot.slot] ?? ""}
-                           onInput={(e) => setNames({ ...names, [slot.slot]: e.currentTarget.value })} aria-label="Name" />
-                    <label class="check" title="Publishing copies photos into the library and leaves the originals here">
-                      <input type="checkbox" checked={!!readOnly[slot.slot]}
-                             onChange={(e) => setReadOnly({ ...readOnly, [slot.slot]: e.currentTarget.checked })} />
-                      Read-only
-                    </label>
-                    <button class="primary">Add</button>
-                  </form>
+                  <AddForm placeholder={defaultName(slot.host_path)} value={names[`slot${slot.slot}`]} readOnly={!!readOnly[`slot${slot.slot}`]}
+                           onName={(v) => setNames({ ...names, [`slot${slot.slot}`]: v })}
+                           onReadOnly={(v) => setReadOnly({ ...readOnly, [`slot${slot.slot}`]: v })}
+                           onAdd={async (name, ro) => !!(await run(() => api.addDumpsite(slot.slot, name, ro), `Added ${name}; scanning it now`))} />
                 ) : (
                   <small class="warn">set in the stack but not mounted yet; redeploy the stack</small>
                 )}
@@ -219,12 +240,68 @@ function DumpsitesPanel() {
             ))}
           </ul>
         )}
+        {stack.self_service ? (
+          stack.shares_error ? (
+            <p class="warn">Couldn't list the NAS's shares: {stack.shares_error}</p>
+          ) : (
+            <>
+              <p class="hint">SMB shares on this NAS. Adding one restarts Featherbase for about a minute to mount it.</p>
+              <ul class="share-list">
+                {stack.shares.map((share) => (
+                  <li key={share.path} class={share.blocked ? "muted" : ""}>
+                    <div><b>{share.name}</b> <code>{share.path}</code>{!share.enabled && <small class="muted"> (SMB sharing off)</small>}</div>
+                    {share.blocked ? (
+                      <small>{share.blocked}</small>
+                    ) : (
+                      <AddForm placeholder={share.name} value={names[share.path]} readOnly={!!readOnly[share.path]} disabled={busy}
+                               onName={(v) => setNames({ ...names, [share.path]: v })}
+                               onReadOnly={(v) => setReadOnly({ ...readOnly, [share.path]: v })}
+                               onAdd={async (name, ro) => {
+                                 if (!window.confirm(`Add ${share.path} as the dumpsite "${name}"${ro ? " (read-only)" : ""}?\n\n` +
+                                   (ro ? "Published photos are copied; nothing in the share is changed." :
+                                         "Published photos are MOVED out of this share into the library.") +
+                                   "\n\nFeatherbase restarts for about a minute.")) return false;
+                                 return !!(await run(() => api.addShare(share.path, name, ro), `Mounting ${name}`, name));
+                               }} />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )
+        ) : free.length === 0 && (
+          <p class="muted">
+            No share is waiting to be added. Set one of{" "}
+            {data.slot_numbers.map((n, i) => <span key={n}>{i ? ", " : ""}<code>DUMPSITE_{n}</code></span>)} in the Portainer stack's
+            environment to the share's folder (e.g. <code>/mnt/MasterPool/Wildlife/Phone</code>) and redeploy; it then shows up here.
+            To add shares right here instead, give the stack the Portainer and TrueNAS settings described in <code>stack.env.example</code>.
+          </p>
+        )}
       </fieldset>
     </section>
   );
 }
 
-function DumpsiteRow({ site, run }: { site: Dumpsite; run: (action: () => Promise<Dumpsites>, message: string) => Promise<Dumpsites | undefined> }) {
+function AddForm({ placeholder, value, readOnly, disabled, onName, onReadOnly, onAdd }: {
+  placeholder: string; value: string | undefined; readOnly: boolean; disabled?: boolean;
+  onName: (value: string) => void; onReadOnly: (value: boolean) => void; onAdd: (name: string, readOnly: boolean) => Promise<boolean>;
+}) {
+  return (
+    <form class="inline-form" onSubmit={async (e) => {
+      e.preventDefault();
+      if (await onAdd((value ?? "").trim() || placeholder, readOnly)) onName("");
+    }}>
+      <input placeholder={placeholder} value={value ?? ""} onInput={(e) => onName(e.currentTarget.value)} aria-label="Name" disabled={disabled} />
+      <label class="check" title="Publishing copies photos into the library and leaves the originals here">
+        <input type="checkbox" checked={readOnly} onChange={(e) => onReadOnly(e.currentTarget.checked)} disabled={disabled} />
+        Read-only
+      </label>
+      <button class="primary" disabled={disabled}>Add</button>
+    </form>
+  );
+}
+
+function DumpsiteRow({ site, run }: { site: Dumpsite; run: (action: () => Promise<Dumpsites>, message: string, mountedName?: string) => Promise<Dumpsites | undefined> }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(site.name);
   return (
@@ -267,7 +344,7 @@ function DumpsiteRow({ site, run }: { site: Dumpsite; run: (action: () => Promis
         )}
         {!site.main && site.files === 0 && (
           <button type="button" class="danger" onClick={() => {
-            if (window.confirm(`Remove ${site.name}? Photos already published stay in the library; files in the share are not touched.`))
+            if (window.confirm(`Remove ${site.name}? Photos already published stay in the library; files in the share are not touched. The share is unmounted, which restarts Featherbase for about a minute.`))
               run(() => api.removeDumpsite(site.id), `${site.name} removed`);
           }}>Remove</button>
         )}
