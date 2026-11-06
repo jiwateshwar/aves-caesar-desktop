@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Uploa
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.orm import Session as OrmSession, selectinload
 
 from . import brand, jobs as job_queue
@@ -30,12 +30,12 @@ from . import stackadmin
 from .dumpsites import MAIN_ID, SLOTS, available_slots, file_path, roots
 from .geocoding import Geocoder
 from .locations import UNPUBLISHED, clear_session_location, set_analyse_without_location, set_session_location
-from .models import Dumpsite, FileStatus, Job, JobStatus, LifeListEntry, LifeListImport, MediaFile, Session, Shot, ShotStatus, WorkerState
+from .models import Detection, DetectionStatus, Dumpsite, FileStatus, Job, JobStatus, LifeListEntry, LifeListImport, MediaFile, Session, Shot, ShotStatus, WorkerState
 from .previews import PreviewStore
 from .publisher import ConflictChecker
 from .review import (ReviewError, add_species, append_suffix, confirm_confident, confirm_shot, ignore_shot, reject_detection,
                      reopen_shot, restore_detection, set_species)
-from .serializers import CATEGORIES, age_seconds, iso, session_dict, shot_category, shot_dict
+from .serializers import CATEGORIES, age_seconds, iso, session_dict, shot_category, shot_dict, species_dict
 from .settings import SettingsStore, WorkflowSettings
 
 
@@ -204,7 +204,24 @@ def list_sessions(db: OrmSession = Depends(get_db)) -> list[dict]:
     settings = SettingsStore.load(db)
     sessions = db.scalars(select(Session).order_by(Session.shoot_date.desc())).all()
     conflict_shots = _conflict_shot_ids(db)
-    return [session_dict(session, _category_counts(db, settings, session.id, conflict_shots=conflict_shots)) for session in sessions]
+    # For filtering and sorting the list: which dumpsites each session's photos came from, how many have only a
+    # guessed date (no EXIF date, so the file's time was used), and when photos were last added.
+    extra: dict[int, dict] = {}
+    for session_id, dumpsite_id, guessed, last_added in db.execute(
+            select(Shot.session_id, Shot.dumpsite_id, func.sum(case((Shot.captured_at_source == "file_mtime", 1), else_=0)),
+                   func.max(Shot.created_at)).group_by(Shot.session_id, Shot.dumpsite_id)):
+        info = extra.setdefault(session_id, {"dumpsites": [], "date_guessed": 0, "last_added_at": None})
+        info["dumpsites"].append(dumpsite_id)
+        info["date_guessed"] += int(guessed or 0)
+        if last_added is not None and (info["last_added_at"] is None or last_added > info["last_added_at"]):
+            info["last_added_at"] = last_added
+    result = []
+    for session in sessions:
+        info = extra.get(session.id, {"dumpsites": [], "date_guessed": 0, "last_added_at": None})
+        result.append({**session_dict(session, _category_counts(db, settings, session.id, conflict_shots=conflict_shots)),
+                       "dumpsites": sorted(info["dumpsites"]), "date_guessed": info["date_guessed"],
+                       "last_added_at": iso(info["last_added_at"])})
+    return result
 
 
 @app.get("/api/sessions/{session_id}")
@@ -265,6 +282,7 @@ def confirm_session_confident(session_id: int, folder: str | None = None, db: Or
 
 @app.get("/api/shots")
 def list_shots(session_id: int | None = None, folder: str | None = None, category: str | None = None,
+               species_id: str | None = None, unconfirmed: bool = False, newest_first: bool = False,
                offset: int = Query(0, ge=0), limit: int = Query(120, ge=1, le=500), db: OrmSession = Depends(get_db)) -> dict:
     if category is not None and category not in CATEGORIES:
         raise HTTPException(400, f"category must be one of {', '.join(CATEGORIES)}")
@@ -274,6 +292,11 @@ def list_shots(session_id: int | None = None, folder: str | None = None, categor
         query = query.where(Shot.session_id == session_id)
     if folder is not None:
         query = query.where(Shot.dump_folder == folder)
+    if species_id is not None:
+        # Photos with a bird identified (or suggested) as this species; unconfirmed: only those still to be checked.
+        statuses = [DetectionStatus.pending] if unconfirmed else [DetectionStatus.pending, DetectionStatus.confirmed]
+        query = query.where(Shot.id.in_(select(Detection.shot_id).where(Detection.species_id == species_id, Detection.status.in_(statuses))),
+                            Shot.status.not_in([ShotStatus.ignored, ShotStatus.error]))
     threshold = settings.confidence_threshold
     if category == "conflicts":
         query = query.where(Shot.id.in_(_conflict_shot_ids(db) or {-1}))
@@ -286,7 +309,8 @@ def list_shots(session_id: int | None = None, folder: str | None = None, categor
     elif category is not None:
         query = query.where(Shot.status == ShotStatus(category))
     total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
-    shots = db.scalars(query.order_by(Shot.captured_at, Shot.id).offset(offset).limit(limit)).all()
+    order = (Shot.captured_at.desc(), Shot.id.desc()) if newest_first else (Shot.captured_at, Shot.id)
+    shots = db.scalars(query.order_by(*order).offset(offset).limit(limit)).all()
     conflicts = ConflictChecker(db).conflicts([f.id for shot in shots for f in shot.files])
     life_list = life_species_ids(db)
     return {"total": total, "items": [shot_dict(shot, catalog(), settings, conflicts, life_list=life_list) for shot in shots]}
@@ -474,6 +498,46 @@ def _job_dict(job: Job) -> dict:
     return {"id": job.id, "kind": job.kind, "status": job.status.value, "progress": job.progress, "total": job.total,
             "message": job.message, "result": job.result, "payload": job.payload,
             "created_at": iso(job.created_at), "finished_at": iso(job.finished_at)}
+
+
+# ---------------------------------------------------------------- birds
+
+@app.get("/api/birds")
+def list_birds(db: OrmSession = Depends(get_db)) -> dict:
+    """Every species identified so far (suggested or confirmed), with where and when it was photographed."""
+    settings = SettingsStore.load(db)
+    life_list = life_species_ids(db)
+    rows = db.execute(
+        select(Detection.species_id, Detection.status, Detection.confidence, Shot.id, Shot.status, Shot.captured_at,
+               Shot.country, Shot.state, Shot.city, Shot.preview_ready)
+        .join(Shot, Shot.id == Detection.shot_id)
+        .where(Detection.species_id.is_not(None), Detection.status != DetectionStatus.rejected,
+               Shot.status.not_in([ShotStatus.ignored, ShotStatus.error]))).all()
+    birds: dict[str, dict] = {}
+    for species_id, status, confidence, shot_id, shot_status, captured_at, country, state_name, city, preview in rows:
+        bird = birds.setdefault(species_id, {"shots": set(), "confirmed": set(), "places": {}, "first": None, "last": None,
+                                             "best": None, "best_confidence": -1.0})
+        bird["shots"].add(shot_id)
+        if status == DetectionStatus.confirmed:
+            bird["confirmed"].add(shot_id)
+        place = (country, state_name, city)
+        bird["places"].setdefault(place, set()).add(shot_id)
+        if captured_at is not None:
+            bird["first"] = min(bird["first"] or captured_at, captured_at)
+            bird["last"] = max(bird["last"] or captured_at, captured_at)
+        if preview and (confidence or 0) > bird["best_confidence"]:
+            bird["best"], bird["best_confidence"] = shot_id, confidence or 0
+    items = []
+    for species_id, bird in birds.items():
+        species = species_dict(catalog(), species_id, settings.species_language, life_list if life_list else None)
+        places = sorted(({"country": c, "state": st, "city": ci, "shots": len(ids)} for (c, st, ci), ids in bird["places"].items()),
+                        key=lambda p: -p["shots"])
+        items.append({"species": species, "shots": len(bird["shots"]), "confirmed": len(bird["confirmed"]),
+                      "unconfirmed": len(bird["shots"] - bird["confirmed"]), "places": places,
+                      "first_seen": bird["first"].isoformat() if bird["first"] else None,
+                      "last_seen": bird["last"].isoformat() if bird["last"] else None, "photo_shot_id": bird["best"]})
+    items.sort(key=lambda b: (b["species"] or {}).get("name", "").casefold())
+    return {"life_list_loaded": bool(life_list), "birds": items}
 
 
 # ---------------------------------------------------------------- dumpsites

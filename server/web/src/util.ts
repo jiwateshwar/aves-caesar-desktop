@@ -147,3 +147,9 @@ export async function attempt<T>(action: () => Promise<T>, success?: string | ((
     return undefined;
   }
 }
+
+/** Like navigate, but replaces the current history entry (for filters that change on every keystroke). */
+export function replaceRoute(path: string, params: Record<string, string | number | undefined | null> = {}) {
+  window.history.replaceState(null, "", href(path, params));
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+}

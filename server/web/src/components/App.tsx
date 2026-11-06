@@ -2,6 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "../api";
 import { BRAND } from "../brand";
 import { attempt, href, onToast, useLoader, useRoute, type Toast } from "../util";
+import { BirdsPage } from "./BirdsPage";
 import { DuplicatesPage } from "./DuplicatesPage";
 import { JobsPage } from "./JobsPage";
 import { SessionPage } from "./SessionPage";
@@ -22,6 +23,7 @@ export function App() {
         </a>
         <nav>
           <a href={href("")} class={!page || page === "sessions" ? "active" : ""}>Sessions</a>
+          <a href={href("birds")} class={page === "birds" ? "active" : ""}>Birds</a>
           <a href={href("duplicates")} class={page === "duplicates" ? "active" : ""}>
             Duplicates{status.data?.duplicates ? <span class="badge">{status.data.duplicates}</span> : null}
           </a>
@@ -39,6 +41,8 @@ export function App() {
       <main>
         {page === "sessions" && id ? (
           <SessionPage id={Number(id)} route={route} onChange={status.reload} />
+        ) : page === "birds" ? (
+          <BirdsPage route={route} onChange={status.reload} />
         ) : page === "duplicates" ? (
           <DuplicatesPage onChange={status.reload} />
         ) : page === "jobs" ? (
@@ -46,7 +50,7 @@ export function App() {
         ) : page === "settings" ? (
           <SettingsPage />
         ) : (
-          <SessionsPage status={status.data} />
+          <SessionsPage status={status.data} route={route} />
         )}
       </main>
       <footer class="footer">

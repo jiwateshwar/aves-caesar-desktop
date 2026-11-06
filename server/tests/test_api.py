@@ -159,3 +159,32 @@ def test_password_protects_everything_but_health(client, monkeypatch):
     assert client.get("/api/sessions").status_code == 401
     token = base64.b64encode(b"aves:s3cret").decode()
     assert client.get("/api/sessions", headers={"Authorization": f"Basic {token}"}).status_code == 200
+
+
+def test_birds_page_lists_species_with_places_and_new_ones(client, scanner, clock, config, make_photo, database):
+    _dump_and_analyse(scanner, clock, config, make_photo, database, {
+        "a.JPG": {"gps": (11.41, 76.70), "birds": [_bird("101", 0.96)]},
+        "b.JPG": {"gps": (11.41, 76.70), "birds": [_bird("101", 0.80), _bird("102", 0.70)]},
+        "c.JPG": {"gps": (11.41, 76.70)},
+    })
+    sessions = client.get("/api/sessions").json()
+    assert (sessions[0]["dumpsites"], sessions[0]["date_guessed"]) == ([1], 0) and sessions[0]["last_added_at"]
+
+    birds = {b["species"]["id"]: b for b in client.get("/api/birds").json()["birds"]}
+    assert set(birds) == {"101", "102"} and "new" not in birds["101"]["species"]
+    kingfisher = birds["101"]
+    assert (kingfisher["shots"], kingfisher["confirmed"], kingfisher["unconfirmed"]) == (2, 0, 2)
+    assert kingfisher["places"] == [{"country": "India", "state": "Tamil Nadu", "city": "Ooty", "shots": 2}]
+    assert kingfisher["first_seen"].startswith("2026-10-18") and kingfisher["photo_shot_id"]
+
+    client.post("/api/life-list", files={"file": ("l.csv", b"Common Name,Scientific Name\nCommon Kingfisher,Alcedo atthis\n", "text/csv")})
+    listing = client.get("/api/birds").json()
+    assert listing["life_list_loaded"] is True
+    assert {b["species"]["id"]: b["species"]["new"] for b in listing["birds"]} == {"101": True, "102": False}  # 102 is the kingfisher
+
+    shots = client.get("/api/shots", params={"species_id": "101", "unconfirmed": True, "newest_first": True}).json()
+    assert shots["total"] == 2 and shots["items"][0]["captured_at"] > shots["items"][1]["captured_at"]
+    assert client.post(f"/api/shots/{shots['items'][0]['id']}/confirm").status_code == 200
+    assert client.get("/api/shots", params={"species_id": "101", "unconfirmed": True}).json()["total"] == 1
+    assert client.get("/api/shots", params={"species_id": "101"}).json()["total"] == 2
+    assert {b["species"]["id"]: b["confirmed"] for b in client.get("/api/birds").json()["birds"]}["101"] == 1

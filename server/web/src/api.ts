@@ -42,6 +42,21 @@ export interface SessionSummary {
   analyse_without_location: boolean;
   counts: Counts;
   folders?: { folder: string; counts: Counts }[];
+  /** List only: dumpsite ids the photos came from, photos whose date was guessed from the file, last photo added. */
+  dumpsites?: number[];
+  date_guessed?: number;
+  last_added_at?: string | null;
+}
+
+export interface Bird {
+  species: Species;
+  shots: number;
+  confirmed: number;
+  unconfirmed: number;
+  places: { country: string | null; state: string | null; city: string | null; shots: number }[];
+  first_seen: string | null;
+  last_seen: string | null;
+  photo_shot_id: number | null;
 }
 
 export interface FileInfo {
@@ -207,8 +222,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return response.json() as Promise<T>;
 }
 
-const query = (params: Record<string, string | number | undefined | null>) => {
-  const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "") as [string, string][];
+const query = (params: Record<string, string | number | boolean | undefined | null>) => {
+  const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "" && v !== false) as [string, string][];
   return entries.length ? "?" + new URLSearchParams(entries.map(([k, v]) => [k, String(v)])).toString() : "";
 };
 
@@ -220,7 +235,9 @@ export const api = {
   shiftDate: (id: number, date: string) =>
     request<{ session_id: number; days: number; moved: number; kept_published: number; requeued: number }>("POST", `/api/sessions/${id}/shift-date`, { date }),
   confirmConfident: (id: number, folder?: string) => request<{ confirmed: number }>("POST", `/api/sessions/${id}/confirm-confident${query({ folder })}`),
-  shots: (params: { session_id?: number; folder?: string; category?: Category; offset?: number; limit?: number }) =>
+  birds: () => request<{ life_list_loaded: boolean; birds: Bird[] }>("GET", "/api/birds"),
+  shots: (params: { session_id?: number; folder?: string; category?: Category; species_id?: string; unconfirmed?: boolean;
+                    newest_first?: boolean; offset?: number; limit?: number }) =>
     request<{ total: number; items: ShotSummary[] }>("GET", `/api/shots${query(params)}`),
   shot: (id: number) => request<ShotDetail>("GET", `/api/shots/${id}`),
   confirm: (id: number) => request<ShotDetail>("POST", `/api/shots/${id}/confirm`),

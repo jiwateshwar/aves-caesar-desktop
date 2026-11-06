@@ -19,6 +19,7 @@
   --amber: #8a5a00;
   --red: #a13a30;
   --blue: #4f765e;
+  --plum: #6d4880;
   --nav-bg: var(--forest);
   --nav-text: var(--ivory);
   --nav-muted: var(--sage);
@@ -45,6 +46,7 @@
     --amber: #d9b877;
     --red: #e8867c;
     --blue: #9cc2a8;
+    --plum: #cfa9e0;
     --nav-bg: #0c1c17;
     color-scheme: dark;
   }
@@ -278,3 +280,34 @@ table.list th { color: var(--muted); font-weight: 500; }
 .share-list li.muted b, .share-list li.muted code { opacity: 0.6; }
 .share-list code { word-break: break-all; }
 .settings .notice { margin: 0; padding: 8px 10px; border-radius: var(--radius); background: var(--surface-2, rgba(120, 150, 90, 0.12)); }
+
+/* Sessions: filters, and cards that need a location (amber) or a date check (plum) stand out. */
+.session-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.session-filters input[type="search"] { flex: 1 1 220px; max-width: 360px; }
+.session-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.legend { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; background: var(--surface); }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.legend.location i { background: var(--amber); }
+.legend.date i { background: var(--plum); }
+.legend.active { border-color: var(--accent); color: var(--accent); }
+.session-card.needs-location { border-left: 5px solid var(--amber); background: color-mix(in srgb, var(--amber) 9%, var(--surface)); }
+.session-card.needs-date { border-left: 5px solid var(--plum); background: color-mix(in srgb, var(--plum) 9%, var(--surface)); }
+.session-card.needs-location.needs-date {
+  border-left: 5px solid var(--amber); box-shadow: inset 5px 0 0 var(--plum);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--amber) 9%, var(--surface)), color-mix(in srgb, var(--plum) 9%, var(--surface)));
+}
+.date-warning { color: var(--plum); font-size: 0.9rem; }
+
+/* Birds */
+.bird-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+.bird-card { display: flex; gap: 12px; padding: 10px; text-decoration: none; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.bird-card:hover { border-color: var(--accent); }
+.bird-card.is-new { border-left: 5px solid var(--amber); }
+.bird-thumb { flex: 0 0 120px; height: 90px; border-radius: 6px; overflow: hidden; background: #000; }
+.bird-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bird-thumb .placeholder { color: #ccc; font-size: 0.8rem; display: flex; align-items: center; justify-content: center; height: 100%; }
+.bird-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.bird-name b { font-size: 1.02rem; }
+.bird-places { font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; }
+.bird-place-list { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+@media (max-width: 480px) { .bird-list { grid-template-columns: 1fr; } .bird-thumb { flex-basis: 96px; height: 72px; } }
