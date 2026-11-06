@@ -73,3 +73,9 @@ def test_a_picked_park_becomes_the_session_folder(client, scanner, clock, config
     # Pasted coordinates still use the nearest town, in English.
     updated = client.patch(f"/api/sessions/{session_id}", json={"location": {"latitude": 29.35, "longitude": 79.55}}).json()
     assert updated["location"]["city"].isascii()
+
+
+def test_places_in_countries_already_photographed_come_first(monkeypatch):
+    _fake_photon(monkeypatch, payload={"features": [PHOTON["features"][4], PHOTON["features"][3]]})  # Pakistan first
+    places = PlaceSearch(online=True).search("sattal", 10, prefer_countries={"India"})
+    assert [p.country for p in places if p.source == "online"] == ["India", "Pakistan"]

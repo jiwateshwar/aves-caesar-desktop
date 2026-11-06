@@ -49,7 +49,7 @@ class PlaceSearch:
         self.timeout = timeout
         self._failed_until = 0.0  # after a failure, don't make every keystroke wait for the timeout
 
-    def search(self, query: str, limit: int = 10) -> list[Place]:
+    def search(self, query: str, limit: int = 10, prefer_countries: set[str] | None = None) -> list[Place]:
         offline = self.geocoder.search(query, limit)
         if not self.online or time.monotonic() < self._failed_until:
             return offline
@@ -62,6 +62,8 @@ class PlaceSearch:
         # Offline towns the online search didn't return (by name and country) go after the online results.
         seen = {(search_key(p.city), p.country_code) for p in online}
         extra = [p for p in offline if (search_key(p.city), p.country_code) not in seen]
+        if prefer_countries:  # stable: keeps the search's own ranking within each group
+            online.sort(key=lambda p: p.country not in prefer_countries)
         return (online + extra)[:limit]
 
     def _photon(self, query: str, limit: int) -> list[Place]:

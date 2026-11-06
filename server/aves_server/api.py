@@ -787,8 +787,10 @@ def search_species(q: str = Query(min_length=2), limit: int = Query(20, ge=1, le
 
 
 @app.get("/api/locations/search")
-def search_locations(q: str = Query(min_length=2), limit: int = Query(10, ge=1, le=50)) -> list[dict]:
-    return [place.to_dict() for place in place_search().search(q, limit)]
+def search_locations(q: str = Query(min_length=2), limit: int = Query(10, ge=1, le=50), db: OrmSession = Depends(get_db)) -> list[dict]:
+    # Places in countries you've photographed in come first ("Sattal" in India before the one in Pakistan).
+    countries = set(db.scalars(select(Shot.country).where(Shot.country.is_not(None)).distinct()))
+    return [place.to_dict() for place in place_search().search(q, limit, prefer_countries=countries)]
 
 
 @app.get("/api/locations/reverse")
