@@ -32,6 +32,9 @@ export interface Place {
   population: number;
   distance_km: number | null;
   label: string;
+  /** e.g. "national park", "village": online results only. */
+  kind?: string | null;
+  source?: "online" | "offline";
 }
 
 export interface SessionSummary {

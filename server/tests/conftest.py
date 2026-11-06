@@ -98,3 +98,12 @@ def make_photo(exiftool_path: str):
         return path
 
     return make
+
+
+@pytest.fixture(autouse=True)
+def offline_place_search(monkeypatch):
+    """Tests never call the online place search; test_places.py fakes it."""
+    from aves_server import placesearch
+
+    monkeypatch.setenv("AVES_PLACE_SEARCH", "offline")
+    monkeypatch.setattr(placesearch, "_shared", None)

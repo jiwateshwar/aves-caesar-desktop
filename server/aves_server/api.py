@@ -29,6 +29,7 @@ from .db import Database
 from . import stackadmin
 from .dumpsites import MAIN_ID, SLOTS, available_slots, file_path, roots
 from .geocoding import Geocoder
+from .placesearch import place_search
 from .locations import UNPUBLISHED, clear_session_location, set_analyse_without_location, set_session_location
 from .models import Detection, DetectionStatus, Dumpsite, FileStatus, Job, JobStatus, LifeListEntry, LifeListImport, MediaFile, Session, Shot, ShotStatus, WorkerState
 from .previews import PreviewStore
@@ -190,6 +191,11 @@ class LocationBody(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     label: str | None = Field(default=None, max_length=300)
+    # The place picked from the search: its names become the session's country/state/city folders. Without them
+    # (pasted coordinates), the nearest town is looked up.
+    city: str | None = Field(default=None, max_length=120)
+    state: str | None = Field(default=None, max_length=120)
+    country: str | None = Field(default=None, max_length=120)
 
 
 class SessionUpdate(BaseModel):
@@ -248,7 +254,9 @@ def update_session(session_id: int, body: SessionUpdate, db: OrmSession = Depend
     if body.clear_location:
         queued += clear_session_location(session, settings)
     elif body.location is not None:
-        queued += set_session_location(session, body.location.latitude, body.location.longitude, body.location.label, settings)
+        loc = body.location
+        names = (loc.country, loc.state, loc.city) if loc.city and loc.country else None
+        queued += set_session_location(session, loc.latitude, loc.longitude, loc.label, settings, names=names)
     if body.analyse_without_location is not None:
         queued += set_analyse_without_location(session, body.analyse_without_location)
     db.flush()
@@ -780,7 +788,7 @@ def search_species(q: str = Query(min_length=2), limit: int = Query(20, ge=1, le
 
 @app.get("/api/locations/search")
 def search_locations(q: str = Query(min_length=2), limit: int = Query(10, ge=1, le=50)) -> list[dict]:
-    return [place.to_dict() for place in Geocoder.shared().search(q, limit)]
+    return [place.to_dict() for place in place_search().search(q, limit)]
 
 
 @app.get("/api/locations/reverse")

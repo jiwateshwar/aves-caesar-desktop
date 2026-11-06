@@ -311,3 +311,4 @@ table.list th { color: var(--muted); font-weight: 500; }
 .bird-places { font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; }
 .bird-place-list { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
 @media (max-width: 480px) { .bird-list { grid-template-columns: 1fr; } .bird-thumb { flex-basis: 96px; height: 72px; } }
+.place-kind { text-transform: capitalize; margin-right: 6px; padding: 0 6px; border-radius: 999px; background: var(--surface-2); color: var(--text); }

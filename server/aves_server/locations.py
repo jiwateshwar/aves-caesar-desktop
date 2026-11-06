@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .geocoding import Geocoder
+from .geocoding import Geocoder, english
 from .models import DetectionSource, DetectionStatus, Session, Shot, ShotStatus
 from .settings import WorkflowSettings
 
@@ -37,14 +37,23 @@ def initial_status(shot: Shot, session: Session) -> ShotStatus:
 
 
 def set_session_location(session: Session, latitude: float, longitude: float, label: str | None,
-                         settings: WorkflowSettings, geocoder: Geocoder | None = None) -> int:
-    """Sets where a day's photos were taken. Returns how many shots were queued for (re)analysis."""
+                         settings: WorkflowSettings, geocoder: Geocoder | None = None,
+                         names: tuple[str | None, str | None, str | None] | None = None) -> int:
+    """Sets where a day's photos were taken. Returns how many shots were queued for (re)analysis.
+
+    names: (country, state, city) of a place picked by name, e.g. a national park; otherwise the nearest town.
+    """
     if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
         raise ValueError("Coordinates are out of range")
-    place = (geocoder or Geocoder.shared()).reverse(latitude, longitude, settings.city_min_population)
     session.location_lat, session.location_lon = latitude, longitude
-    session.country, session.state, session.city = (place.country, place.state, place.city) if place else (None, None, None)
-    session.location_label = label or (place.label if place else f"{latitude:.4f}, {longitude:.4f}")
+    if names is not None:
+        country, state, city = (english(n.strip()) if n and n.strip() else None for n in names)
+        session.country, session.state, session.city = country, state, city
+        session.location_label = english(label) or ", ".join(n for n in (city, state, country) if n)
+    else:
+        place = (geocoder or Geocoder.shared()).reverse(latitude, longitude, settings.city_min_population)
+        session.country, session.state, session.city = (place.country, place.state, place.city) if place else (None, None, None)
+        session.location_label = label or (place.label if place else f"{latitude:.4f}, {longitude:.4f}")
     return _refresh_shots(session, settings, geocoder)
 
 

@@ -7,7 +7,7 @@ export function LocationPanel({ session, onChange }: { session: SessionSummary; 
   const [editing, setEditing] = useState(false);
   const open = editing || (waiting > 0 && !session.location);
 
-  const save = async (place: { latitude: number; longitude: number; label?: string }) => {
+  const save = async (place: PickedPlace) => {
     const result = await attempt(() => api.updateSession(session.id, { location: place }),
       (r) => (r.queued ? `Location set; ${plural(r.queued, "photo")} queued for identification` : "Location set"));
     if (result) {
@@ -62,9 +62,11 @@ export function LocationPanel({ session, onChange }: { session: SessionSummary; 
   );
 }
 
+export type PickedPlace = { latitude: number; longitude: number; label?: string; city?: string; state?: string | null; country?: string };
+
 const COORDINATES = /^\s*(-?\d+(?:\.\d+)?)\s*[,; ]\s*(-?\d+(?:\.\d+)?)\s*$/;
 
-export function PlacePicker({ onPick, onCancel }: { onPick: (place: { latitude: number; longitude: number; label?: string }) => void; onCancel?: () => void }) {
+export function PlacePicker({ onPick, onCancel }: { onPick: (place: PickedPlace) => void; onCancel?: () => void }) {
   const [text, setText] = useState("");
   const [results, setResults] = useState<Place[]>([]);
   const [coordinatePlace, setCoordinatePlace] = useState<{ latitude: number; longitude: number; place: Place | null } | null>(null);
@@ -97,7 +99,7 @@ export function PlacePicker({ onPick, onCancel }: { onPick: (place: { latitude: 
         autoFocus
         value={text}
         onInput={(e) => setText(e.currentTarget.value)}
-        placeholder="Search a town or city (e.g. “Ooty” or “Ooty, India”), or paste coordinates like 11.4102, 76.6950"
+        placeholder="Search a place, park or lake (e.g. “Sattal”, “Jim Corbett”, “Ooty, India”), or paste coordinates like 11.4102, 76.6950"
       />
       {coordinatePlace && (
         <button class="place-option" onClick={() => onPick({ latitude: coordinatePlace.latitude, longitude: coordinatePlace.longitude })}>
@@ -111,16 +113,19 @@ export function PlacePicker({ onPick, onCancel }: { onPick: (place: { latitude: 
       )}
       {results.map((place) => (
         <button key={`${place.latitude},${place.longitude}`} class="place-option"
-                onClick={() => onPick({ latitude: place.latitude, longitude: place.longitude, label: place.label })}>
+                onClick={() => onPick({ latitude: place.latitude, longitude: place.longitude, label: place.label,
+                                        city: place.city, state: place.state, country: place.country })}>
           <b>{place.city}</b>
           <small>
+            {place.kind && <span class="place-kind">{place.kind}</span>}
             {[place.state, place.country].filter(Boolean).join(", ")}
             {place.population ? ` · pop. ${place.population.toLocaleString()}` : ""}
           </small>
         </button>
       ))}
       <p class="hint">
-        Tip: for a reserve or trail without a nearby town, drop a pin in any map app and paste its coordinates here.
+        The place you pick names the session's folder (country/state/place). For a spot that isn't listed, drop a pin in any map
+        app and paste its coordinates; the nearest town is then used.
         {onCancel && (
           <>
             {" "}

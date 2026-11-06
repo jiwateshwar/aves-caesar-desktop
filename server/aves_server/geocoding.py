@@ -1,6 +1,8 @@
 """Offline geocoding over the GeoNames cities dataset bundled with reverse_geocode.
 
-Nothing is sent over the network; the dataset ships inside the package.
+Nothing is sent over the network; the dataset ships inside the package. GeoNames spells places the local way
+("Bhīm Tāl"); names are turned into plain English letters ("Bhim Tal") so searching and folder names work.
+Searching by name is better done online (placesearch.py); this is the fallback and the GPS lookup.
 """
 
 from __future__ import annotations
@@ -9,7 +11,9 @@ import csv
 import gzip
 import json
 import math
+import re
 import threading
+import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -27,6 +31,8 @@ class Place:
     longitude: float
     population: int
     distance_km: float | None = None
+    kind: str | None = None      # e.g. "national park", "village" (online search only)
+    source: str = "offline"
 
     @property
     def label(self) -> str:
@@ -34,6 +40,24 @@ class Place:
 
     def to_dict(self) -> dict:
         return {**asdict(self), "label": self.label}
+
+
+# Letters that don't decompose into an ASCII letter plus an accent.
+_LETTERS = str.maketrans({"ı": "i", "ł": "l", "Ł": "L", "ß": "ss", "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ð": "d", "Ð": "D",
+                          "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ǝ": "e", "ə": "e", "ħ": "h", "Ħ": "H", "þ": "th", "Þ": "Th",
+                          "’": "'", "‘": "'", "ʼ": "'", "ʻ": "'", "–": "-", "—": "-"})
+
+
+def english(name: str | None) -> str | None:
+    """Plain English letters: "Bhīm Tāl" -> "Bhim Tal", "Łódź" -> "Lodz"."""
+    if not name:
+        return name
+    return "".join(c for c in unicodedata.normalize("NFKD", name.translate(_LETTERS)) if not unicodedata.combining(c))
+
+
+def search_key(text: str) -> str:
+    """Spaces, hyphens and accents don't matter: "bhimtal" finds "Bhim Tal"."""
+    return re.sub(r"[^0-9a-z]", "", (english(text) or "").casefold())
 
 
 class Geocoder:
@@ -44,9 +68,11 @@ class Geocoder:
         data_dir = Path(reverse_geocode.__file__).parent
         with gzip.open(data_dir / "geocode.gz") as handle:
             self._locations: list[dict] = json.loads(handle.read())
+        for location in self._locations:
+            location["city"], location["state"] = english(location["city"]), english(location.get("state"))
         with (data_dir / "countries.csv").open(encoding="utf-8") as handle:
             self._countries = {code: name for code, name in csv.reader(handle)}
-        self._search_keys = [location["city"].casefold() for location in self._locations]
+        self._search_keys = [search_key(location["city"]) for location in self._locations]
         self._trees: dict[int, tuple[cKDTree, list[int]]] = {}
 
     @classmethod
@@ -67,7 +93,7 @@ class Geocoder:
     def search(self, query: str, limit: int = 10) -> list[Place]:
         """Finds places by name. "Ooty, India" narrows by state or country."""
         name, _, qualifier = query.partition(",")
-        name, qualifier = name.strip().casefold(), qualifier.strip().casefold()
+        name, qualifier = search_key(name), (english(qualifier.strip()) or "").casefold()
         if len(name) < 2:
             return []
         ranked = []
@@ -84,7 +110,7 @@ class Geocoder:
 
     def _matches_qualifier(self, location: dict, qualifier: str) -> bool:
         country = self._countries.get(location["country_code"], "")
-        return any(qualifier in value.casefold() for value in (country, location.get("state", ""), location["country_code"]))
+        return any(qualifier in (value or "").casefold() for value in (country, location.get("state"), location["country_code"]))
 
     def _tree(self, min_population: int) -> tuple[cKDTree, list[int]]:
         with self._lock:
@@ -101,6 +127,9 @@ class Geocoder:
         # 3D points keep nearest-neighbour search correct across the antimeridian and near the poles.
         lat, lon = math.radians(latitude), math.radians(longitude)
         return (math.cos(lat) * math.cos(lon), math.cos(lat) * math.sin(lon), math.sin(lat))
+
+    def country_name(self, code: str | None) -> str | None:
+        return self._countries.get((code or "").upper()) if code else None
 
     def _place(self, location: dict, distance_km: float | None = None) -> Place:
         return Place(
